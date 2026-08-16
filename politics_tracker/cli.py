@@ -296,6 +296,34 @@ def cmd_extract_stances(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_detect_stance_changes(args: argparse.Namespace) -> int:
+    from .enrich.stances import detect_stance_changes
+
+    store = SqliteStore(args.db)
+    changes = detect_stance_changes(
+        store.load_stances(published_only=True),
+        store.load_utterances(),
+        threshold=args.threshold,
+    )
+    queued = 0
+    for change in changes:
+        reason = "held:stance_change_requires_context"
+        review = ReviewItem(
+            review_id=review_id_for(
+                "stance_change", change["change_id"], reason, change
+            ),
+            kind="stance_change",
+            target_id=change["change_id"],
+            payload=change,
+            reason=reason,
+            status="pending",
+            created_at=_now_iso(),
+        )
+        queued += int(store.enqueue_review(review))
+    print(f"입장 변화 후보 {len(changes)}건, 신규 검수 큐 {queued}건")
+    return 0
+
+
 def cmd_verify_api(args: argparse.Namespace) -> int:
     """실제 API 키로 연결성·서비스 ID·필드 매핑을 점검한다. 로컬에서 실행."""
     from .sources.assembly_api import AssemblyAPIError, AssemblyOpenAPI, normalize_member
@@ -461,7 +489,7 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
     if review.status != "pending":
         print(f"이미 결정된 검수 항목입니다: {review.status}", file=sys.stderr)
         return 1
-    if review.kind not in {"topic", "stance"}:
+    if review.kind not in {"topic", "stance", "stance_change"}:
         print(f"아직 승인 반영을 지원하지 않는 종류입니다: {review.kind}", file=sys.stderr)
         return 1
 
@@ -492,7 +520,7 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
         target.topic_source = "human_reviewed"
         target.human_reviewed = True
         store.save_utterances(utterances)
-    else:
+    elif review.kind == "stance":
         target_stance = next(
             (stance for stance in store.load_stances() if stance.stance_id == review.target_id),
             None,
@@ -529,11 +557,21 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
             print(f"입장 승인 값이 유효하지 않습니다: {error}", file=sys.stderr)
             return 1
         store.upsert_stances([approved_stance])
+    else:
+        context_note = str(payload.get("context_note") or args.note or "").strip()
+        if not context_note:
+            print(
+                "입장 변화 승인은 --edit context_note=... 맥락 주석이 필요합니다.",
+                file=sys.stderr,
+            )
+            return 1
+        payload["context_note"] = context_note
     decided = store.decide_review(
         review.review_id,
         status="approved",
         decided_at=_now_iso(),
         note=args.note,
+        payload=payload,
     )
     print(f"승인 완료: {decided.review_id} → {decided.target_id}")
     return 0
@@ -623,6 +661,13 @@ def build_parser() -> argparse.ArgumentParser:
     stance.add_argument("--axes", default="config/stance_axes.yaml")
     stance.add_argument("--db", default=DEFAULT_DB_PATH)
     stance.set_defaults(func=cmd_extract_stances)
+
+    stance_changes = sub.add_parser(
+        "detect-stance-changes", help="시간순 인접 입장의 큰 변화 후보를 검수 큐에 적재"
+    )
+    stance_changes.add_argument("--threshold", type=float, default=0.8)
+    stance_changes.add_argument("--db", default=DEFAULT_DB_PATH)
+    stance_changes.set_defaults(func=cmd_detect_stance_changes)
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")

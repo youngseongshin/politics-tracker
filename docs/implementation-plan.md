@@ -26,7 +26,7 @@
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
 | `politics-tracker extract-stances` | 정책 축 입장 추출 | rules·Claude 페이크·인용구 가드 동작 |
-| `pytest` | 테스트 55건 | 전부 통과 |
+| `pytest` | 테스트 56건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -43,7 +43,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     55건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     56건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -393,6 +393,9 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 - T4.3 변화 감지: 같은 인물·같은 축에서 시간순 인접 값의 차이가 0.8 이상이면
   stance_change 후보를 만든다. 후보는 전건 검수 큐로 보내고 승인 전에는 사이트에
   싣지 않는다. 승인 시 맥락 주석(당적 변경, 지역구 변경 등)을 함께 기록한다.
+  **완료(2026-08-16):** `detect-stance-changes`가 발언·축별 최선의 추출 버전을 하나만
+  고른 뒤 시간순 인접 값을 비교한다. 0.8 이상 후보는 전건 큐에 넣고 맥락 주석이
+  없으면 승인할 수 없다. 같은 입력 재실행은 검수 항목을 중복 생성하지 않는다.
 - T4.4 사이트: 인물 페이지에 축별 입장 이력 섹션. 시계열은 HTML 요소로 그린다
   (유동 폭 SVG 금지, §1.3). 각 점은 근거 발언 퍼머링크다. 변화 항목은 변경 전후
   발언 두 건을 나란히 싣고 주석을 병기한다.

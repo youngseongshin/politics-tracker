@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from politics_tracker import cli
 from politics_tracker.enrich.stances import (
+    detect_stance_changes,
     extract_stances_claude,
     extract_stances_rules,
     load_stance_axes,
@@ -189,3 +190,64 @@ def test_extract_stances_cli_is_idempotent_and_queues_held(tmp_path):
     assert cli.cmd_extract_stances(args) == 0
     assert len(store.load_stances()) == 1
     assert len(store.load_reviews(kind="stance", status="pending")) == 1
+
+
+def test_change_detection_uses_adjacent_values_and_requires_context_review(tmp_path):
+    first_utterance = _utterance("공급 확대가 필요합니다.")
+    second_utterance = _utterance("투기를 억제해야 합니다.")
+    second_utterance.utterance_id = "utt_2"
+    second_utterance.spoken_at = "2026-08-15"
+
+    first = Stance(
+        stance_id=stance_id_for("utt_1", "housing_regulation", "stance_v1"),
+        utterance_id="utt_1",
+        person_id="p1",
+        axis="housing_regulation",
+        value=-0.6,
+        confidence=0.9,
+        rationale_quote="공급 확대",
+        extractor={"backend": "test", "model": "test", "prompt_version": "stance_v1"},
+    )
+    second = Stance(
+        stance_id=stance_id_for("utt_2", "housing_regulation", "stance_v1"),
+        utterance_id="utt_2",
+        person_id="p1",
+        axis="housing_regulation",
+        value=0.3,
+        confidence=0.9,
+        rationale_quote="투기를 억제",
+        extractor={"backend": "test", "model": "test", "prompt_version": "stance_v1"},
+    )
+    changes = detect_stance_changes(
+        [first, second], [first_utterance, second_utterance]
+    )
+    assert len(changes) == 1
+    assert changes[0]["delta"] == 0.9
+    assert changes[0]["before_utterance_id"] == "utt_1"
+    assert changes[0]["after_utterance_id"] == "utt_2"
+
+    db_path = tmp_path / "db.sqlite"
+    store = SqliteStore(db_path)
+    store.save_people([Person(person_id="p1", name="이가상")])
+    store.save_utterances([first_utterance, second_utterance])
+    store.save_stances([first, second])
+    detect_args = Namespace(db=str(db_path), threshold=0.8)
+    assert cli.cmd_detect_stance_changes(detect_args) == 0
+    assert cli.cmd_detect_stance_changes(detect_args) == 0
+    pending = store.load_reviews(kind="stance_change", status="pending")
+    assert len(pending) == 1
+
+    missing_context = Namespace(
+        db=str(db_path), review_id=pending[0].review_id, edit=None, note=None
+    )
+    assert cli.cmd_review_approve(missing_context) == 1
+    approved_args = Namespace(
+        db=str(db_path),
+        review_id=pending[0].review_id,
+        edit=["context_note=당적 변경 전후 발언"],
+        note="두 원문 확인",
+    )
+    assert cli.cmd_review_approve(approved_args) == 0
+    approved = store.get_review(pending[0].review_id)
+    assert approved.status == "approved"
+    assert approved.payload["context_note"] == "당적 변경 전후 발언"

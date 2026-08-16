@@ -60,6 +60,7 @@ politics-tracker classify-topics --backend claude
 # 4. 정책 축 입장 추출. 기본은 보수적 문구 규칙, Claude는 구조화 출력 사용
 politics-tracker extract-stances --backend rules
 # politics-tracker extract-stances --backend claude
+politics-tracker detect-stance-changes
 
 # 5. 정적 사이트 생성
 politics-tracker build-site --out ./site_out
@@ -81,6 +82,13 @@ politics-tracker review list --kind topic
 politics-tracker review show rev_...
 politics-tracker review approve rev_... --edit topics=housing,economy --note "원문 대조 완료"
 politics-tracker review reject rev_... --note "근거 부족"
+```
+
+입장 변화 후보는 맥락 주석을 넣어 승인합니다.
+
+```bash
+politics-tracker review approve rev_... \
+  --edit context_note="당적 변경 전후 발언" --note "두 원문 확인"
 ```
 
 한 번 승인·기각한 검수 결정은 수정할 수 없습니다.

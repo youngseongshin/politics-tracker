@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -357,3 +359,75 @@ def extract_stances_claude(
             if reason is None:
                 stats["extracted"] += 1
     return stances, stats
+
+
+def stance_change_id_for(before_stance_id: str, after_stance_id: str) -> str:
+    canonical = f"{before_stance_id}\0{after_stance_id}".encode("utf-8")
+    return "stchg_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
+def detect_stance_changes(
+    stances: list[Stance],
+    utterances: list[Utterance],
+    *,
+    threshold: float = 0.8,
+) -> list[dict[str, Any]]:
+    """동일 인물·축의 시간순 인접 공개 입장 사이 큰 변화 후보를 만든다."""
+    if threshold <= 0 or threshold > 2:
+        raise ValueError("stance change threshold must be between 0 and 2")
+    utterance_by_id = {utterance.utterance_id: utterance for utterance in utterances}
+
+    # 같은 발언·축을 여러 추출기 버전이 평가했다면 사람 확정, 신뢰도, ID 순으로
+    # 하나만 선택해 추출기 교체를 입장 변화로 오인하지 않는다.
+    best: dict[tuple[str, str, str], Stance] = {}
+    for stance in stances:
+        if stance.held_reason or stance.utterance_id not in utterance_by_id:
+            continue
+        key = (stance.person_id, stance.axis, stance.utterance_id)
+        current = best.get(key)
+        rank = (int(stance.human_reviewed), stance.confidence, stance.stance_id)
+        if current is None or rank > (
+            int(current.human_reviewed),
+            current.confidence,
+            current.stance_id,
+        ):
+            best[key] = stance
+
+    grouped: dict[tuple[str, str], list[Stance]] = defaultdict(list)
+    for stance in best.values():
+        grouped[(stance.person_id, stance.axis)].append(stance)
+
+    changes: list[dict[str, Any]] = []
+    for (person_id, axis), items in sorted(grouped.items()):
+        items.sort(
+            key=lambda stance: (
+                utterance_by_id[stance.utterance_id].spoken_at,
+                utterance_by_id[stance.utterance_id].source.get("url", ""),
+                utterance_by_id[stance.utterance_id].order,
+                stance.stance_id,
+            )
+        )
+        for before, after in zip(items, items[1:]):
+            delta = after.value - before.value
+            if abs(delta) < threshold:
+                continue
+            before_utterance = utterance_by_id[before.utterance_id]
+            after_utterance = utterance_by_id[after.utterance_id]
+            changes.append(
+                {
+                    "change_id": stance_change_id_for(before.stance_id, after.stance_id),
+                    "person_id": person_id,
+                    "axis": axis,
+                    "before_stance_id": before.stance_id,
+                    "after_stance_id": after.stance_id,
+                    "before_utterance_id": before.utterance_id,
+                    "after_utterance_id": after.utterance_id,
+                    "before_spoken_at": before_utterance.spoken_at,
+                    "after_spoken_at": after_utterance.spoken_at,
+                    "before_value": before.value,
+                    "after_value": after.value,
+                    "delta": round(delta, 6),
+                    "context_note": None,
+                }
+            )
+    return changes

@@ -470,6 +470,7 @@ class SqliteStore:
         status: str,
         decided_at: str,
         note: str | None = None,
+        payload: dict | None = None,
     ) -> ReviewItem:
         if status not in {"approved", "rejected"}:
             raise ValueError("review decision must be approved or rejected")
@@ -479,10 +480,17 @@ class SqliteStore:
                 cursor = conn.execute(
                     """
                     UPDATE reviews
-                    SET status = ?, decided_at = ?, note = ?
+                    SET status = ?, decided_at = ?, note = ?,
+                        payload_json = COALESCE(?, payload_json)
                     WHERE review_id = ? AND status = 'pending'
                     """,
-                    (status, decided_at, note, review_id),
+                    (
+                        status,
+                        decided_at,
+                        note,
+                        _json(payload) if payload is not None else None,
+                        review_id,
+                    ),
                 )
                 if cursor.rowcount != 1:
                     current = conn.execute(
