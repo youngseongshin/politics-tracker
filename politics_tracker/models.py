@@ -143,6 +143,56 @@ def _canonical_value(value: Any) -> Any:
     return value
 
 
+@dataclass
+class Stance:
+    stance_id: str
+    utterance_id: str
+    person_id: str
+    axis: str
+    value: float
+    confidence: float
+    rationale_quote: str
+    extractor: dict[str, str]
+    human_reviewed: bool = False
+    held_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.stance_id.startswith("stance_"):
+            raise ValueError("Stance.stance_id must start with stance_")
+        if not -1 <= self.value <= 1:
+            raise ValueError("Stance.value must be between -1 and 1")
+        if not 0 <= self.confidence <= 1:
+            raise ValueError("Stance.confidence must be between 0 and 1")
+        required_extractor = {"backend", "model", "prompt_version"}
+        if not required_extractor.issubset(self.extractor):
+            raise ValueError("Stance.extractor requires backend, model, prompt_version")
+        if not self.held_reason and not self.rationale_quote:
+            raise ValueError("Published stance requires rationale_quote")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Stance":
+        return cls(
+            stance_id=data["stance_id"],
+            utterance_id=data["utterance_id"],
+            person_id=data["person_id"],
+            axis=data["axis"],
+            value=float(data["value"]),
+            confidence=float(data["confidence"]),
+            rationale_quote=data.get("rationale_quote", ""),
+            extractor=dict(data["extractor"]),
+            human_reviewed=bool(data.get("human_reviewed", False)),
+            held_reason=data.get("held_reason"),
+        )
+
+
+def stance_id_for(utterance_id: str, axis: str, prompt_version: str) -> str:
+    canonical = f"{utterance_id}\0{axis}\0{prompt_version}".encode("utf-8")
+    return "stance_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:
     """회의록(출처)과 날짜, 순서로 결정되는 안정적 ID. 재수집해도 같은 ID가 나온다."""
     h = hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:8]

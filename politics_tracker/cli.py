@@ -335,13 +335,15 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     people = source.load_people()
     utterances = source.load_utterances()
     reviews = source.load_reviews()
+    stances = source.load_stances()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
     target.save_reviews(reviews)
+    target.save_stances(stances)
     print(
         f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
-        f"검수 {len(reviews)}건 → {target.db_path}"
+        f"검수 {len(reviews)}건, 입장 {len(stances)}건 → {target.db_path}"
     )
     return 0
 
@@ -351,13 +353,15 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     people = source.load_people()
     utterances = source.load_utterances()
     reviews = source.load_reviews()
+    stances = source.load_stances()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
     target.save_reviews(reviews)
+    target.save_stances(stances)
     print(
         f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
-        f"검수 {len(reviews)}건 → {target.root}"
+        f"검수 {len(reviews)}건, 입장 {len(stances)}건 → {target.root}"
     )
     return 0
 

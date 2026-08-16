@@ -1,0 +1,41 @@
+- key: housing_regulation
+  label: 부동산 규제와 공급
+  negative_pole: 규제 완화·공급 확대 우선
+  positive_pole: 규제 강화·투기 억제 우선
+  topic_keys: [housing]
+  notes: 주택 공급 방식과 시장 규제 강도에 관한 정책 스펙트럼이다.
+
+- key: fiscal_policy
+  label: 재정 운용
+  negative_pole: 재정 건전성·감세 우선
+  positive_pole: 재정 확장·증세 수용
+  topic_keys: [economy]
+  notes: 재정 지출과 조세 부담의 방향에 관한 정책 스펙트럼이다.
+
+- key: labor_hours
+  label: 근로시간
+  negative_pole: 근로시간 유연화
+  positive_pole: 근로시간 단축·규제 유지
+  topic_keys: [labor]
+  notes: 법정 근로시간과 유연근무 규제에 관한 정책 스펙트럼이다.
+
+- key: nuclear_energy
+  label: 원자력 발전
+  negative_pole: 원전 축소·재생에너지 전환
+  positive_pole: 원전 확대·유지
+  topic_keys: [environment_energy, tech_industry]
+  notes: 발전원 구성에서 원자력 발전의 비중과 역할에 관한 정책 스펙트럼이다.
+
+- key: prosecution_reform
+  label: 검찰 권한
+  negative_pole: 검찰 권한 유지·보강
+  positive_pole: 검찰 권한 축소·분산
+  topic_keys: [justice]
+  notes: 수사·기소 권한의 배분과 검찰 조직 개편에 관한 정책 스펙트럼이다.
+
+- key: north_korea
+  label: 대북 정책
+  negative_pole: 압박·억지 우선
+  positive_pole: 대화·교류 우선
+  topic_keys: [foreign_security]
+  notes: 북한에 대한 제재·억지와 대화·교류의 우선순위에 관한 정책 스펙트럼이다.

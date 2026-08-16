@@ -11,7 +11,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .models import Person, ReviewItem, Utterance
+from .models import Person, ReviewItem, Stance, Utterance
 
 
 class Store:
@@ -23,6 +23,7 @@ class Store:
         self.people_path = self.root / "people.jsonl"
         self.utterances_path = self.root / "utterances.jsonl"
         self.reviews_path = self.root / "reviews.jsonl"
+        self.stances_path = self.root / "stances.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -54,6 +55,13 @@ class Store:
     def load_reviews(self) -> list[ReviewItem]:
         return [ReviewItem.from_dict(data) for data in _read_jsonl(self.reviews_path)]
 
+    # -- stances --------------------------------------------------------
+    def save_stances(self, stances: list[Stance]) -> None:
+        _write_jsonl(self.stances_path, [stance.to_dict() for stance in stances])
+
+    def load_stances(self) -> list[Stance]:
+        return [Stance.from_dict(data) for data in _read_jsonl(self.stances_path)]
+
 
 _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS people (
@@ -78,6 +86,23 @@ CREATE INDEX IF NOT EXISTS idx_utterances_person_spoken_at
     ON utterances(person_id, spoken_at);
 CREATE INDEX IF NOT EXISTS idx_utterances_spoken_at
     ON utterances(spoken_at);
+
+CREATE TABLE IF NOT EXISTS stances (
+    stance_id TEXT PRIMARY KEY,
+    utterance_id TEXT NOT NULL,
+    person_id TEXT NOT NULL,
+    axis TEXT NOT NULL,
+    value REAL NOT NULL CHECK (value >= -1 AND value <= 1),
+    confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    human_reviewed INTEGER NOT NULL CHECK (human_reviewed IN (0, 1)),
+    held_reason TEXT,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_stances_person_axis
+    ON stances(person_id, axis);
+CREATE INDEX IF NOT EXISTS idx_stances_utterance
+    ON stances(utterance_id);
 
 CREATE TABLE IF NOT EXISTS reviews (
     review_id TEXT PRIMARY KEY,
@@ -239,6 +264,91 @@ class SqliteStore:
                     ],
                 )
                 after = conn.execute("SELECT COUNT(*) FROM utterances").fetchone()[0]
+            return after - before
+        finally:
+            conn.close()
+
+    # -- stances --------------------------------------------------------
+    @staticmethod
+    def _stance_values(stance: Stance) -> tuple:
+        return (
+            stance.stance_id,
+            stance.utterance_id,
+            stance.person_id,
+            stance.axis,
+            stance.value,
+            stance.confidence,
+            int(stance.human_reviewed),
+            stance.held_reason,
+            _json(stance.to_dict()),
+        )
+
+    def save_stances(self, stances: list[Stance]) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM stances")
+                conn.executemany(
+                    """
+                    INSERT INTO stances(
+                        stance_id, utterance_id, person_id, axis, value, confidence,
+                        human_reviewed, held_reason, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [self._stance_values(stance) for stance in stances],
+                )
+        finally:
+            conn.close()
+
+    def load_stances(
+        self,
+        *,
+        person_id: str | None = None,
+        published_only: bool = False,
+    ) -> list[Stance]:
+        where: list[str] = []
+        values: list[str] = []
+        if person_id:
+            where.append("person_id = ?")
+            values.append(person_id)
+        if published_only:
+            where.append("held_reason IS NULL")
+        sql = "SELECT payload_json FROM stances"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY person_id, axis, stance_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [Stance.from_dict(json.loads(row["payload_json"])) for row in rows]
+        finally:
+            conn.close()
+
+    def upsert_stances(self, stances: list[Stance]) -> int:
+        conn = self._connect()
+        try:
+            with conn:
+                before = conn.execute("SELECT COUNT(*) FROM stances").fetchone()[0]
+                conn.executemany(
+                    """
+                    INSERT INTO stances(
+                        stance_id, utterance_id, person_id, axis, value, confidence,
+                        human_reviewed, held_reason, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(stance_id) DO UPDATE SET
+                        utterance_id = excluded.utterance_id,
+                        person_id = excluded.person_id,
+                        axis = excluded.axis,
+                        value = excluded.value,
+                        confidence = excluded.confidence,
+                        human_reviewed = excluded.human_reviewed,
+                        held_reason = excluded.held_reason,
+                        payload_json = excluded.payload_json
+                    WHERE stances.human_reviewed = 0
+                    """,
+                    [self._stance_values(stance) for stance in stances],
+                )
+                after = conn.execute("SELECT COUNT(*) FROM stances").fetchone()[0]
             return after - before
         finally:
             conn.close()

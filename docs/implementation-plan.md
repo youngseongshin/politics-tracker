@@ -25,7 +25,7 @@
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
-| `pytest` | 테스트 47건 | 전부 통과 |
+| `pytest` | 테스트 50건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -42,7 +42,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     47건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     50건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -376,6 +376,9 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 목적: 발언을 주제 축 위의 위치로 바꾸고, 위치 변화를 근거와 함께 보여준다.
 
 - T4.1 `config/stance_axes.yaml` 작성(§3.2 초안, 사용자 승인 후 확정)과 로더.
+  **완료(2026-08-16):** 사용자의 전체 진행 승인에 따라 초안 6축을 공개 YAML로
+  확정했다. 로더는 중복 키, 필수 문구와 주제 키를 검증한다. stance 스키마·모델과
+  SQLite/JSONL 저장 경로도 함께 추가했다.
 - T4.2 `extract-stances` 명령: 주제가 붙고 축과 연결된 발언을 배치로 처리한다.
   구조화 출력 스키마: `{utterance_id, axis, value, confidence, rationale_quote}`.
   `classify_claude`의 골격(배치, 임계값, refusal 처리)을 재사용한다. 임계값 0.7
