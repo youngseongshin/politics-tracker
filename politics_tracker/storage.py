@@ -16,6 +16,7 @@ from .models import (
     ConsistencyPair,
     Person,
     Pledge,
+    Prediction,
     ReviewItem,
     Stance,
     Utterance,
@@ -39,6 +40,7 @@ class Store:
         self.bill_links_path = self.root / "utterance_bill_links.jsonl"
         self.consistency_pairs_path = self.root / "consistency_pairs.jsonl"
         self.pledges_path = self.root / "pledges.jsonl"
+        self.predictions_path = self.root / "predictions.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -137,6 +139,44 @@ class Store:
                 _validate_pledge_update(old, pledge)
             existing[pledge.pledge_id] = pledge
         self.save_pledges(list(existing.values()))
+        return added
+
+    # -- predictions ----------------------------------------------------
+    def save_predictions(self, predictions: list[Prediction]) -> None:
+        existing = {
+            prediction.prediction_id: prediction for prediction in self.load_predictions()
+        }
+        incoming = {prediction.prediction_id: prediction for prediction in predictions}
+        if len(incoming) != len(predictions):
+            raise ValueError("Duplicate prediction_id in prediction collection")
+        missing = sorted(set(existing) - set(incoming))
+        if missing:
+            raise ValueError(f"Prediction records cannot be removed: {', '.join(missing)}")
+        for prediction_id, old in existing.items():
+            _validate_prediction_update(old, incoming[prediction_id])
+        _write_jsonl(
+            self.predictions_path,
+            [prediction.to_dict() for prediction in predictions],
+        )
+
+    def load_predictions(self) -> list[Prediction]:
+        return [
+            Prediction.from_dict(data) for data in _read_jsonl(self.predictions_path)
+        ]
+
+    def upsert_predictions(self, predictions: list[Prediction]) -> int:
+        if len({item.prediction_id for item in predictions}) != len(predictions):
+            raise ValueError("Duplicate prediction_id in prediction collection")
+        existing = {
+            prediction.prediction_id: prediction for prediction in self.load_predictions()
+        }
+        added = sum(item.prediction_id not in existing for item in predictions)
+        for prediction in predictions:
+            old = existing.get(prediction.prediction_id)
+            if old:
+                _validate_prediction_update(old, prediction)
+            existing[prediction.prediction_id] = prediction
+        self.save_predictions(list(existing.values()))
         return added
 
 
@@ -245,6 +285,20 @@ CREATE TABLE IF NOT EXISTS pledges (
 CREATE INDEX IF NOT EXISTS idx_pledges_person ON pledges(person_id);
 CREATE INDEX IF NOT EXISTS idx_pledges_status ON pledges(current_status);
 
+CREATE TABLE IF NOT EXISTS predictions (
+    prediction_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL,
+    deadline TEXT NOT NULL,
+    status TEXT NOT NULL
+        CHECK (status IN ('open', 'correct', 'incorrect', 'unresolvable')),
+    list_order INTEGER NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_predictions_person ON predictions(person_id);
+CREATE INDEX IF NOT EXISTS idx_predictions_status_deadline
+    ON predictions(status, deadline);
+
 CREATE TABLE IF NOT EXISTS reviews (
     review_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -274,6 +328,33 @@ def _validate_pledge_update(old: Pledge, new: Pledge) -> None:
         raise ValueError("Registered pledge text, source, and criteria are immutable")
     if new.status_history[: len(old.status_history)] != old.status_history:
         raise ValueError("Pledge status history is append-only")
+
+
+def _validate_prediction_update(old: Prediction, new: Prediction) -> None:
+    immutable_old = (
+        old.prediction_id,
+        old.utterance_id,
+        old.person_id,
+        old.claim,
+        old.deadline,
+        old.criteria,
+        old.registered_by,
+    )
+    immutable_new = (
+        new.prediction_id,
+        new.utterance_id,
+        new.person_id,
+        new.claim,
+        new.deadline,
+        new.criteria,
+        new.registered_by,
+    )
+    if immutable_old != immutable_new:
+        raise ValueError("Registered prediction fields are immutable")
+    if old.status != "open" and old != new:
+        raise ValueError("Resolved prediction is immutable")
+    if old.status != "open" and new.status == "open":
+        raise ValueError("Resolved prediction cannot be reopened")
 
 
 class SqliteStore:
@@ -980,6 +1061,135 @@ class SqliteStore:
                         self._pledge_values(pledge, list_order),
                     )
                 after = conn.execute("SELECT COUNT(*) FROM pledges").fetchone()[0]
+            return after - before
+        finally:
+            conn.close()
+
+    # -- predictions ----------------------------------------------------
+    @staticmethod
+    def _prediction_values(prediction: Prediction, list_order: int) -> tuple:
+        return (
+            prediction.prediction_id,
+            prediction.person_id,
+            prediction.deadline,
+            prediction.status,
+            list_order,
+            _json(prediction.to_dict()),
+        )
+
+    def save_predictions(self, predictions: list[Prediction]) -> None:
+        existing = {
+            prediction.prediction_id: prediction for prediction in self.load_predictions()
+        }
+        incoming = {prediction.prediction_id: prediction for prediction in predictions}
+        if len(incoming) != len(predictions):
+            raise ValueError("Duplicate prediction_id in prediction collection")
+        missing = sorted(set(existing) - set(incoming))
+        if missing:
+            raise ValueError(f"Prediction records cannot be removed: {', '.join(missing)}")
+        for prediction_id, old in existing.items():
+            _validate_prediction_update(old, incoming[prediction_id])
+
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM predictions")
+                conn.executemany(
+                    """
+                    INSERT INTO predictions(
+                        prediction_id, person_id, deadline, status, list_order,
+                        payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        self._prediction_values(prediction, index)
+                        for index, prediction in enumerate(predictions)
+                    ],
+                )
+        finally:
+            conn.close()
+
+    def load_predictions(
+        self,
+        *,
+        person_id: str | None = None,
+        status: str | None = None,
+    ) -> list[Prediction]:
+        where: list[str] = []
+        values: list[str] = []
+        if person_id:
+            where.append("person_id = ?")
+            values.append(person_id)
+        if status:
+            where.append("status = ?")
+            values.append(status)
+        sql = "SELECT payload_json FROM predictions"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY list_order, prediction_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [
+                Prediction.from_dict(json.loads(row["payload_json"])) for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def get_prediction(self, prediction_id: str) -> Prediction | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT payload_json FROM predictions WHERE prediction_id = ?",
+                (prediction_id,),
+            ).fetchone()
+            return Prediction.from_dict(json.loads(row["payload_json"])) if row else None
+        finally:
+            conn.close()
+
+    def upsert_predictions(self, predictions: list[Prediction]) -> int:
+        if len({item.prediction_id for item in predictions}) != len(predictions):
+            raise ValueError("Duplicate prediction_id in prediction collection")
+        conn = self._connect()
+        try:
+            existing_rows = conn.execute(
+                "SELECT prediction_id, list_order, payload_json FROM predictions"
+            ).fetchall()
+            existing = {
+                row["prediction_id"]: (
+                    Prediction.from_dict(json.loads(row["payload_json"])),
+                    row["list_order"],
+                )
+                for row in existing_rows
+            }
+            for prediction in predictions:
+                old = existing.get(prediction.prediction_id)
+                if old:
+                    _validate_prediction_update(old[0], prediction)
+
+            with conn:
+                before = len(existing)
+                next_order = (
+                    max((item[1] for item in existing.values()), default=-1) + 1
+                )
+                for prediction in predictions:
+                    old = existing.get(prediction.prediction_id)
+                    list_order = old[1] if old else next_order
+                    if not old:
+                        next_order += 1
+                    conn.execute(
+                        """
+                        INSERT INTO predictions(
+                            prediction_id, person_id, deadline, status, list_order,
+                            payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(prediction_id) DO UPDATE SET
+                            status = excluded.status,
+                            payload_json = excluded.payload_json
+                        """,
+                        self._prediction_values(prediction, list_order),
+                    )
+                after = conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
             return after - before
         finally:
             conn.close()

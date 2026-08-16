@@ -451,6 +451,116 @@ def pledge_id_for(person_id: str, text: str, source_url: str) -> str:
     return "pledge_" + hashlib.sha256(canonical).hexdigest()[:16]
 
 
+PREDICTION_STATUSES = {"open", "correct", "incorrect", "unresolvable"}
+
+
+@dataclass
+class Prediction:
+    prediction_id: str
+    utterance_id: str
+    person_id: str
+    claim: str
+    deadline: str
+    criteria: str
+    status: str
+    resolution: dict[str, Any] | None
+    registered_by: str
+    resolved_at: str | None
+
+    def __post_init__(self) -> None:
+        if not self.prediction_id.startswith("pred_"):
+            raise ValueError("Prediction.prediction_id must start with pred_")
+        if not all(
+            (
+                self.utterance_id,
+                self.person_id,
+                self.claim.strip(),
+                self.criteria.strip(),
+            )
+        ):
+            raise ValueError("Prediction requires utterance, person, claim, and criteria")
+        try:
+            deadline = date.fromisoformat(self.deadline)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Prediction.deadline must be an ISO date") from exc
+        if self.status not in PREDICTION_STATUSES:
+            raise ValueError(f"Invalid prediction status: {self.status}")
+        if self.registered_by != "human":
+            raise ValueError("Prediction.registered_by must be human")
+        if self.status == "open":
+            if self.resolution is not None or self.resolved_at is not None:
+                raise ValueError("Open prediction cannot have a resolution")
+            return
+        if not self.resolution or not self.resolved_at:
+            raise ValueError("Resolved prediction requires resolution and resolved_at")
+        evidence = self.resolution.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            raise ValueError("Prediction resolution requires evidence")
+        for item in evidence:
+            if not isinstance(item, dict) or not item.get("url") or not item.get("note"):
+                raise ValueError("Prediction evidence requires url and note")
+        try:
+            resolved_at = date.fromisoformat(self.resolved_at)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Prediction.resolved_at must be an ISO date") from exc
+        if resolved_at < deadline:
+            raise ValueError("Prediction cannot be resolved before its deadline")
+
+    def with_resolution(
+        self,
+        *,
+        status: str,
+        resolved_at: str,
+        evidence: list[dict[str, str]],
+    ) -> "Prediction":
+        if self.status != "open":
+            raise ValueError("Resolved prediction is immutable")
+        if status == "open":
+            raise ValueError("Resolution status cannot be open")
+        return Prediction(
+            prediction_id=self.prediction_id,
+            utterance_id=self.utterance_id,
+            person_id=self.person_id,
+            claim=self.claim,
+            deadline=self.deadline,
+            criteria=self.criteria,
+            status=status,
+            resolution={"evidence": deepcopy(evidence)},
+            registered_by=self.registered_by,
+            resolved_at=resolved_at,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Prediction":
+        return cls(
+            prediction_id=data["prediction_id"],
+            utterance_id=data["utterance_id"],
+            person_id=data["person_id"],
+            claim=data["claim"],
+            deadline=data["deadline"],
+            criteria=data["criteria"],
+            status=data["status"],
+            resolution=deepcopy(data["resolution"]),
+            registered_by=data["registered_by"],
+            resolved_at=data["resolved_at"],
+        )
+
+
+def prediction_id_for(utterance_id: str, claim: str, deadline: str) -> str:
+    canonical = f"{utterance_id}\0{claim.strip()}\0{deadline}".encode("utf-8")
+    return "pred_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
+def prediction_candidate_id_for(
+    utterance_id: str, claim: str, prompt_version: str
+) -> str:
+    canonical = f"{utterance_id}\0{claim.strip()}\0{prompt_version}".encode("utf-8")
+    return "predcand_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:
     """회의록(출처)과 날짜, 순서로 결정되는 안정적 ID. 재수집해도 같은 ID가 나온다."""
     h = hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:8]

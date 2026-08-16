@@ -51,6 +51,7 @@ jobs:
           politics-tracker link-bills --backend rules
           politics-tracker compute-consistency
           politics-tracker pledge import data/pledges
+          politics-tracker prediction import data/predictions
 
       - name: Build static site from the real-data store
         run: politics-tracker build-site --out site_out

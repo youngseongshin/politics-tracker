@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/prediction.schema.json",
+  "title": "Prediction",
+  "description": "사람이 등록하고 마감 이후 근거로만 판정하는 예측성 발언.",
+  "type": "object",
+  "required": [
+    "prediction_id", "utterance_id", "person_id", "claim", "deadline",
+    "criteria", "status", "resolution", "registered_by", "resolved_at"
+  ],
+  "properties": {
+    "prediction_id": { "type": "string", "pattern": "^pred_" },
+    "utterance_id": { "type": "string", "minLength": 1 },
+    "person_id": { "type": "string", "minLength": 1 },
+    "claim": { "type": "string", "minLength": 1 },
+    "deadline": { "type": "string", "format": "date" },
+    "criteria": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["open", "correct", "incorrect", "unresolvable"]
+    },
+    "resolution": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["evidence"],
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["url", "note"],
+                "properties": {
+                  "url": { "type": "string", "format": "uri" },
+                  "note": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "registered_by": { "const": "human" },
+    "resolved_at": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "format": "date" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "open" } } },
+      "then": {
+        "properties": {
+          "resolution": { "type": "null" },
+          "resolved_at": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "resolution": { "type": "object" },
+          "resolved_at": { "type": "string", "format": "date" }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

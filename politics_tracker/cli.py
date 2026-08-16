@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from importlib import resources
 from pathlib import Path
 
@@ -22,10 +22,12 @@ from .matching import match_utterances
 from .models import (
     Person,
     Pledge,
+    Prediction,
     ReviewItem,
     Stance,
     UtteranceBillLink,
     pledge_id_for,
+    prediction_id_for,
     review_id_for,
 )
 from .site.build import build_site
@@ -561,6 +563,193 @@ def cmd_pledge_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prediction_propose(args: argparse.Namespace) -> int:
+    from .enrich.predictions import (
+        propose_predictions_claude,
+        propose_predictions_rules,
+    )
+
+    store = SqliteStore(args.db)
+    utterances = store.load_utterances()
+    if args.backend == "rules":
+        candidates, stats = propose_predictions_rules(
+            utterances, candidate_limit=args.candidate_limit
+        )
+    else:
+        candidates, stats = propose_predictions_claude(
+            utterances,
+            model=args.model,
+            prompt_version=args.prompt_version,
+            batch_size=args.batch_size,
+            confidence_threshold=args.confidence_threshold,
+            candidate_limit=args.candidate_limit,
+        )
+    queued = 0
+    for candidate in candidates:
+        reason = "held:prediction_requires_review"
+        review = ReviewItem(
+            review_id=review_id_for(
+                "prediction", candidate["candidate_id"], reason, candidate
+            ),
+            kind="prediction",
+            target_id=candidate["candidate_id"],
+            payload=candidate,
+            reason=reason,
+            status="pending",
+            created_at=_now_iso(),
+        )
+        queued += int(store.enqueue_review(review))
+    stats["queued_new"] = queued
+    print(f"예측 후보({args.backend}): {stats}")
+    return 0
+
+
+def cmd_prediction_import(args: argparse.Namespace) -> int:
+    from .prediction_records import load_prediction_path
+
+    store = SqliteStore(args.db)
+    try:
+        predictions = load_prediction_path(args.path)
+    except (FileNotFoundError, OSError, KeyError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    utterances = {
+        utterance.utterance_id: utterance for utterance in store.load_utterances()
+    }
+    invalid = sorted(
+        prediction.prediction_id
+        for prediction in predictions
+        if prediction.utterance_id not in utterances
+        or utterances[prediction.utterance_id].person_id != prediction.person_id
+    )
+    if invalid:
+        print(
+            f"예측의 귀속 발언·인물이 일치하지 않습니다: {', '.join(invalid)}",
+            file=sys.stderr,
+        )
+        return 1
+    merged = []
+    for prediction in predictions:
+        old = store.get_prediction(prediction.prediction_id)
+        same_registration = old and (
+            old.utterance_id,
+            old.person_id,
+            old.claim,
+            old.deadline,
+            old.criteria,
+            old.registered_by,
+        ) == (
+            prediction.utterance_id,
+            prediction.person_id,
+            prediction.claim,
+            prediction.deadline,
+            prediction.criteria,
+            prediction.registered_by,
+        )
+        if same_registration and old.status != "open" and prediction.status == "open":
+            merged.append(old)
+        else:
+            merged.append(prediction)
+    try:
+        added = store.upsert_predictions(merged)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"예측 {len(predictions)}건 읽음, 신규 {added}건 → {store.db_path}")
+    return 0
+
+
+def cmd_prediction_register(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    review = store.get_review(args.review_id)
+    if review is None or review.kind != "prediction":
+        print(f"예측 검수 항목을 찾을 수 없습니다: {args.review_id}", file=sys.stderr)
+        return 1
+    if review.status != "approved":
+        print("승인된 예측 후보만 등록할 수 있습니다.", file=sys.stderr)
+        return 1
+    utterance = next(
+        (
+            item
+            for item in store.load_utterances()
+            if item.utterance_id == review.payload.get("utterance_id")
+        ),
+        None,
+    )
+    if utterance is None or not utterance.person_id:
+        print("예측 후보의 귀속 발언을 찾을 수 없습니다.", file=sys.stderr)
+        return 1
+    try:
+        if date.fromisoformat(args.deadline) <= date.fromisoformat(utterance.spoken_at):
+            raise ValueError("예측 마감일은 발언일보다 뒤여야 합니다.")
+        prediction = Prediction(
+            prediction_id=prediction_id_for(
+                utterance.utterance_id, args.claim, args.deadline
+            ),
+            utterance_id=utterance.utterance_id,
+            person_id=utterance.person_id,
+            claim=args.claim.strip(),
+            deadline=args.deadline,
+            criteria=args.criteria.strip(),
+            status="open",
+            resolution=None,
+            registered_by="human",
+            resolved_at=None,
+        )
+        added = store.upsert_predictions([prediction])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    action = "등록" if added else "동일 레코드 확인"
+    print(f"예측 {action}: {prediction.prediction_id}")
+    return 0
+
+
+def cmd_prediction_resolve(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    prediction = store.get_prediction(args.prediction_id)
+    if prediction is None:
+        print(f"예측을 찾을 수 없습니다: {args.prediction_id}", file=sys.stderr)
+        return 1
+    resolved_at = args.resolved_at or _now_iso()[:10]
+    evidence = [{"url": args.evidence, "note": args.note}]
+    if prediction.status != "open":
+        if (
+            prediction.status == args.status
+            and prediction.resolved_at == resolved_at
+            and prediction.resolution == {"evidence": evidence}
+        ):
+            print(f"예측 동일 판정 확인: {prediction.prediction_id}")
+            return 0
+        print("이미 판정된 예측은 변경할 수 없습니다.", file=sys.stderr)
+        return 1
+    try:
+        resolved = prediction.with_resolution(
+            status=args.status,
+            resolved_at=resolved_at,
+            evidence=evidence,
+        )
+        store.upsert_predictions([resolved])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"예측 판정: {prediction.prediction_id} · {resolved.status}")
+    return 0
+
+
+def cmd_prediction_list(args: argparse.Namespace) -> int:
+    predictions = SqliteStore(args.db).load_predictions(
+        person_id=args.person_id, status=args.status
+    )
+    for prediction in predictions:
+        print(
+            f"{prediction.prediction_id}  {prediction.person_id}  "
+            f"{prediction.status}  {prediction.deadline}  {prediction.claim}"
+        )
+    print(f"총 {len(predictions)}건")
+    return 0
+
+
 def cmd_verify_api(args: argparse.Namespace) -> int:
     """실제 API 키로 연결성·서비스 ID·필드 매핑을 점검한다. 로컬에서 실행."""
     from .sources.assembly_api import AssemblyAPIError, AssemblyOpenAPI, normalize_member
@@ -643,6 +832,7 @@ def cmd_build_site(args: argparse.Namespace) -> int:
         votes=store.load_votes(),
         consistency_pairs=store.load_consistency_pairs(),
         pledges=store.load_pledges(),
+        predictions=store.load_predictions(),
     )
     print(f"인물 페이지 {stats.people_pages}개, 발언 {stats.utterances_rendered}건 렌더링 "
           f"(미귀속 {stats.unmatched_utterances}건) -> {Path(args.out) / 'index.html'}")
@@ -666,6 +856,7 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     bill_links = source.load_bill_links()
     consistency_pairs = source.load_consistency_pairs()
     pledges = source.load_pledges()
+    predictions = source.load_predictions()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -676,11 +867,13 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     target.save_bill_links(bill_links)
     target.save_consistency_pairs(consistency_pairs)
     target.save_pledges(pledges)
+    target.save_predictions(predictions)
     print(
         f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
         f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
-        f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건 → {target.db_path}"
+        f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건, "
+        f"예측 {len(predictions)}건 → {target.db_path}"
     )
     return 0
 
@@ -696,6 +889,7 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     bill_links = source.load_bill_links()
     consistency_pairs = source.load_consistency_pairs()
     pledges = source.load_pledges()
+    predictions = source.load_predictions()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -706,11 +900,13 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     target.save_bill_links(bill_links)
     target.save_consistency_pairs(consistency_pairs)
     target.save_pledges(pledges)
+    target.save_predictions(predictions)
     print(
         f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
         f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
-        f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건 → {target.root}"
+        f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건, "
+        f"예측 {len(predictions)}건 → {target.root}"
     )
     return 0
 
@@ -763,7 +959,13 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
     if review.status != "pending":
         print(f"이미 결정된 검수 항목입니다: {review.status}", file=sys.stderr)
         return 1
-    if review.kind not in {"topic", "stance", "stance_change", "bill_link"}:
+    if review.kind not in {
+        "topic",
+        "stance",
+        "stance_change",
+        "bill_link",
+        "prediction",
+    }:
         print(f"아직 승인 반영을 지원하지 않는 종류입니다: {review.kind}", file=sys.stderr)
         return 1
 
@@ -869,6 +1071,36 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
             print(f"발언·의안 연결 승인 값이 유효하지 않습니다: {error}", file=sys.stderr)
             return 1
         store.upsert_bill_links([approved_link])
+    elif review.kind == "prediction":
+        utterance = next(
+            (
+                item
+                for item in store.load_utterances()
+                if item.utterance_id == payload.get("utterance_id")
+            ),
+            None,
+        )
+        extractor = payload.get("extractor") or {}
+        required_text = ("claim", "deadline_hint", "criteria_draft", "rationale_quote")
+        if (
+            utterance is None
+            or not utterance.person_id
+            or payload.get("person_id") != utterance.person_id
+            or payload.get("candidate_id") != review.target_id
+            or not payload.get("verifiable")
+            or not all(str(payload.get(key) or "").strip() for key in required_text)
+            or not {"backend", "model", "prompt_version"}.issubset(extractor)
+        ):
+            print("예측 후보의 발언·검증 가능성·추출 메타데이터가 유효하지 않습니다.", file=sys.stderr)
+            return 1
+        if not normalized_quote_exists(
+            utterance.text, str(payload.get("rationale_quote") or "")
+        ):
+            print("예측 근거 인용구가 발언 원문에 없습니다.", file=sys.stderr)
+            return 1
+        if not (args.note or "").strip():
+            print("예측 후보 승인은 원문 대조 내용을 --note로 남겨야 합니다.", file=sys.stderr)
+            return 1
     else:
         context_note = str(payload.get("context_note") or args.note or "").strip()
         if not context_note:
@@ -1053,6 +1285,65 @@ def build_parser() -> argparse.ArgumentParser:
     pledge_list.add_argument("--person-id", default=None)
     pledge_list.add_argument("--db", default=DEFAULT_DB_PATH)
     pledge_list.set_defaults(func=cmd_pledge_list)
+
+    prediction = sub.add_parser("prediction", help="예측 후보·사람 등록·판정 관리")
+    prediction_actions = prediction.add_subparsers(
+        dest="prediction_command", required=True
+    )
+
+    prediction_import = prediction_actions.add_parser(
+        "import", help="사람이 확정한 예측 YAML 파일 또는 디렉터리 적재"
+    )
+    prediction_import.add_argument("path", nargs="?", default="data/predictions")
+    prediction_import.add_argument("--db", default=DEFAULT_DB_PATH)
+    prediction_import.set_defaults(func=cmd_prediction_import)
+
+    prediction_propose = prediction_actions.add_parser(
+        "propose", help="예측성 발언 후보를 전건 검수 큐에 적재"
+    )
+    prediction_propose.add_argument(
+        "--backend", choices=["rules", "claude"], default="rules"
+    )
+    prediction_propose.add_argument("--model", default="claude-opus-5")
+    prediction_propose.add_argument("--prompt-version", default="prediction_v1")
+    prediction_propose.add_argument("--batch-size", type=int, default=20)
+    prediction_propose.add_argument("--confidence-threshold", type=float, default=0.7)
+    prediction_propose.add_argument("--candidate-limit", type=int, default=500)
+    prediction_propose.add_argument("--db", default=DEFAULT_DB_PATH)
+    prediction_propose.set_defaults(func=cmd_prediction_propose)
+
+    prediction_register = prediction_actions.add_parser(
+        "register", help="승인된 후보의 주장·마감·판정 기준을 사람이 확정"
+    )
+    prediction_register.add_argument("review_id")
+    prediction_register.add_argument("--claim", required=True)
+    prediction_register.add_argument("--deadline", required=True, help="YYYY-MM-DD")
+    prediction_register.add_argument("--criteria", required=True)
+    prediction_register.add_argument("--db", default=DEFAULT_DB_PATH)
+    prediction_register.set_defaults(func=cmd_prediction_register)
+
+    prediction_resolve = prediction_actions.add_parser(
+        "resolve", help="마감 뒤 공식 근거로 예측 판정"
+    )
+    prediction_resolve.add_argument("prediction_id")
+    prediction_resolve.add_argument(
+        "--status", choices=["correct", "incorrect", "unresolvable"], required=True
+    )
+    prediction_resolve.add_argument("--evidence", required=True)
+    prediction_resolve.add_argument("--note", required=True)
+    prediction_resolve.add_argument("--resolved-at", default=None, help="YYYY-MM-DD")
+    prediction_resolve.add_argument("--db", default=DEFAULT_DB_PATH)
+    prediction_resolve.set_defaults(func=cmd_prediction_resolve)
+
+    prediction_list = prediction_actions.add_parser("list", help="등록된 예측 목록")
+    prediction_list.add_argument("--person-id", default=None)
+    prediction_list.add_argument(
+        "--status",
+        choices=["open", "correct", "incorrect", "unresolvable"],
+        default=None,
+    )
+    prediction_list.add_argument("--db", default=DEFAULT_DB_PATH)
+    prediction_list.set_defaults(func=cmd_prediction_list)
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")

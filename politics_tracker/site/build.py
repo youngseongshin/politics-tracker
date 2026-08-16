@@ -22,6 +22,7 @@ from ..models import (
     ConsistencyPair,
     Person,
     Pledge,
+    Prediction,
     ReviewItem,
     Stance,
     Utterance,
@@ -323,6 +324,53 @@ def _pledges_by_person(pledges: list[Pledge]) -> dict[str, dict]:
     return summaries
 
 
+_PREDICTION_STATUS_LABELS = {
+    "open": "진행 중",
+    "correct": "적중",
+    "incorrect": "빗나감",
+    "unresolvable": "판정 불가",
+}
+
+
+def _predictions_by_person(
+    predictions: list[Prediction], utterances: list[Utterance]
+) -> dict[str, dict]:
+    utterance_by_id = {utterance.utterance_id: utterance for utterance in utterances}
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for prediction in predictions:
+        utterance = utterance_by_id.get(prediction.utterance_id)
+        if not utterance or utterance.person_id != prediction.person_id:
+            continue
+        grouped[prediction.person_id].append(
+            {
+                "prediction": prediction,
+                "utterance": utterance,
+                "status_label": _PREDICTION_STATUS_LABELS[prediction.status],
+            }
+        )
+
+    summaries = {}
+    for person_id, rows in grouped.items():
+        rows.sort(
+            key=lambda row: (
+                row["prediction"].deadline,
+                row["prediction"].prediction_id,
+            ),
+            reverse=True,
+        )
+        open_rows = [row for row in rows if row["prediction"].status == "open"]
+        resolved_rows = [row for row in rows if row["prediction"].status != "open"]
+        summaries[person_id] = {
+            "correct": sum(
+                row["prediction"].status == "correct" for row in resolved_rows
+            ),
+            "resolved": len(resolved_rows),
+            "open_rows": open_rows,
+            "resolved_rows": resolved_rows,
+        }
+    return summaries
+
+
 def build_site(
     people: list[Person],
     utterances: list[Utterance],
@@ -335,6 +383,7 @@ def build_site(
     votes: list[Vote] | None = None,
     consistency_pairs: list[ConsistencyPair] | None = None,
     pledges: list[Pledge] | None = None,
+    predictions: list[Prediction] | None = None,
 ) -> BuildStats:
     out = Path(out_dir)
     (out / "person").mkdir(parents=True, exist_ok=True)
@@ -347,10 +396,12 @@ def build_site(
     votes = votes or []
     consistency_pairs = consistency_pairs or []
     pledges = pledges or []
+    predictions = predictions or []
     consistency = _consistency_by_person(
         consistency_pairs, bills, votes, utterances, stances, stance_axes
     )
     pledge_summaries = _pledges_by_person(pledges)
+    prediction_summaries = _predictions_by_person(predictions, utterances)
 
     by_person: dict[str, list[Utterance]] = defaultdict(list)
     unmatched = 0
@@ -380,6 +431,7 @@ def build_site(
             ),
             consistency=consistency.get(person.person_id),
             pledge_summary=pledge_summaries.get(person.person_id),
+            prediction_summary=prediction_summaries.get(person.person_id),
             generated_at=generated_at,
         )
         (out / "person" / f"{person.person_id}.html").write_text(html, encoding="utf-8")

@@ -76,6 +76,16 @@ politics-tracker pledge list
 # politics-tracker pledge set-status pledge_... --status "부분 이행" \
 #   --evidence "https://공식-근거.example/source" --note "일부 완료를 확인한 근거"
 
+# 4-d. 예측 후보는 전건 검수 후 사람이 주장·마감·판정 기준을 등록
+politics-tracker prediction propose --backend rules
+politics-tracker review list --kind prediction
+# politics-tracker review approve rev_... --note "원문과 시한 단서 확인"
+# politics-tracker prediction register rev_... --claim "..." \
+#   --deadline 2027-12-31 --criteria "..."
+# politics-tracker prediction resolve pred_... --status correct \
+#   --evidence "https://공식-통계.example/source" --note "판정 근거"
+politics-tracker prediction import data/predictions
+
 # 5. 정적 사이트 생성
 politics-tracker build-site --out ./site_out
 ```
@@ -135,6 +145,8 @@ politics_tracker/
 ├── enrich/
 │   └── topics.py          주제 분류 — rules(키워드) / claude(구조화 출력, 저신뢰 보류)
 ├── pledges.py             공식 원문 대조 공약 YAML 로더
+├── prediction_records.py  사람 확정 예측의 배포용 YAML 로더
+├── enrich/predictions.py  예측 후보 rules/Claude 추출과 원문 인용 검증
 ├── site/                  Jinja2 정적 사이트 빌더 (렌더 레이어는 추후 Next.js로 교체 가능)
 └── samples/               가상 샘플 데이터 (quickstart용)
 schemas/                   person / utterance JSON Schema

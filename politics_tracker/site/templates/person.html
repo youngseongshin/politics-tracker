@@ -119,6 +119,41 @@
 </section>
 {% endif %}
 
+{% if prediction_summary %}
+<section id="predictions">
+  <h2>예측성 발언 판정</h2>
+  <p><strong>적중 <span class="num">{{ prediction_summary.correct }}</span>건 / 판정 완료 <span class="num">{{ prediction_summary.resolved }}</span>건</strong></p>
+  <p class="muted">사람이 주장, 마감일, 판정 기준을 미리 확정한 예측만 표시합니다. 집계 근거는 아래 목록 전건입니다.</p>
+  {% if prediction_summary.open_rows %}
+  <h3>진행 중</h3>
+  {% for row in prediction_summary.open_rows %}
+  <article class="prediction-item" id="{{ row.prediction.prediction_id }}">
+    <p class="prediction-status">{{ row.status_label }} · 마감 <span class="num">{{ row.prediction.deadline }}</span></p>
+    <h4>{{ row.prediction.claim }}</h4>
+    <p><strong>판정 기준:</strong> {{ row.prediction.criteria }}</p>
+    <a href="#{{ row.utterance.utterance_id }}">근거 발언</a>
+  </article>
+  {% endfor %}
+  {% endif %}
+  {% if prediction_summary.resolved_rows %}
+  <h3>판정 완료</h3>
+  {% for row in prediction_summary.resolved_rows %}
+  <article class="prediction-item" id="{{ row.prediction.prediction_id }}">
+    <p class="prediction-status"><strong>{{ row.status_label }}</strong> · 마감 <span class="num">{{ row.prediction.deadline }}</span> · 판정 <span class="num">{{ row.prediction.resolved_at }}</span></p>
+    <h4>{{ row.prediction.claim }}</h4>
+    <p><strong>판정 기준:</strong> {{ row.prediction.criteria }}</p>
+    <p><a href="#{{ row.utterance.utterance_id }}">근거 발언</a></p>
+    <ul>
+    {% for evidence in row.prediction.resolution.evidence %}
+      <li><a href="{{ evidence.url }}" rel="noopener">판정 근거</a>: {{ evidence.note }}</li>
+    {% endfor %}
+    </ul>
+  </article>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endif %}
+
 <div id="active-topic-filter" class="active-filter" hidden>
   <span><strong id="active-topic-label"></strong> 주제 발언만 표시합니다.</span>
   <button type="button" id="reset-topic-filter" class="text-button">전체 보기</button>
