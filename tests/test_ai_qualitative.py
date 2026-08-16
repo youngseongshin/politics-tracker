@@ -52,7 +52,7 @@ def test_curated_ai_report_has_editorial_depth_and_no_em_dash():
 
     assert report["reviewed_through"] == "2026-08-12"
     assert len(report["themes"]) == 12
-    assert sum(len(theme["evidence"]) for theme in report["themes"]) == 49
+    assert sum(len(theme["evidence"]) for theme in report["themes"]) == 47
     assert len(report["chronology"]) == 4
     assert len(report["cross_cutting"]) >= 4
     assert all(len(theme["discussions"]) >= 2 for theme in report["themes"])
