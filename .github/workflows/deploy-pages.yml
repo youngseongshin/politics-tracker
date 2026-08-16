@@ -2,9 +2,8 @@ name: Deploy GitHub Pages
 
 on:
   workflow_dispatch:
-  # M1 완료 후 아래 일일 배치를 활성화한다. 수집, 분류, 빌드 순서를 같은 잡에서 실행한다.
-  # schedule:
-  #   - cron: "17 18 * * *"
+  schedule:
+    - cron: "17 18 * * *"
 
 permissions:
   contents: read
@@ -18,6 +17,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ASSEMBLY_API_KEY: ${{ secrets.ASSEMBLY_API_KEY }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -34,12 +36,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .
 
-      - name: Require the real-data store
+      - name: Collect current Assembly data
         run: |
-          test -s data/store/people.jsonl || {
-            echo "data/store/people.jsonl is missing. Complete M1 real-data collection before deployment."
-            exit 1
-          }
+          collection_year=$(date -u +%Y)
+          politics-tracker verify-api --era 22
+          politics-tracker fetch-members --era 22
+          politics-tracker fetch-minutes --era 22 --year "$collection_year"
+          politics-tracker fetch-minutes --era 22 --year "$collection_year" \
+            --venue-type assembly_committee
+          politics-tracker classify-topics --backend rules
 
       - name: Build static site from the real-data store
         run: politics-tracker build-site --store data/store --out site_out
