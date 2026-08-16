@@ -14,7 +14,8 @@
 {% for group in groups %}
 <div class="day"><span class="num">{{ group.spoken_at }}</span><span class="session">{{ group.session }}{% if group.committee and group.committee not in group.session %} · {{ group.committee }}{% endif %}</span></div>
   {% for u in group.utterances %}
-  <div class="utt">
+  <div class="utt" id="{{ u.utterance_id }}">
+    <a class="permalink" href="#{{ u.utterance_id }}" aria-label="이 발언의 고유 링크" title="고유 링크">§</a>
     <div class="who">{{ u.speaker_name }}{% if u.speaker_role %}<span class="role">{{ u.speaker_role }}</span>{% endif %}
       {%- for t in u.topics %}<span class="chip">{{ topic_labels.get(t, t) }}</span>{% endfor %}</div>
     <p class="speech">{{ u.text }}</p>

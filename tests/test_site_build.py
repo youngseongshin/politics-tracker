@@ -64,6 +64,9 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
 
     p1 = (tmp_path / "person" / "p1.html").read_text(encoding="utf-8")
     assert "공급 확대가 필요합니다." in p1
+    assert 'id="u1"' in p1
+    assert 'href="#u1"' in p1
+    assert "이 발언의 고유 링크" in p1
     assert "제제20대" not in p1
     assert "제20대, 제21대, 제22대" in p1
     assert "국토교통위원회" in p1

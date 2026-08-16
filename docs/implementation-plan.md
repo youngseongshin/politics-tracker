@@ -302,6 +302,8 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 - T1.3 발언 퍼머링크: 인물 페이지의 각 발언 블록에 `id="{utterance_id}"` 앵커와
   우측 § 링크를 단다. `:target` 하이라이트 스타일(배경 틴트)을 추가한다.
   수용 기준: `person/X.html#utt_...` 직접 접근 시 해당 발언으로 이동하고 표시된다.
+  **완료(2026-08-16):** 모든 발언 블록에 결정적 ID 앵커와 접근성 레이블이 있는
+  § 링크를 추가했다. 직접 접근한 발언은 배경 틴트로 표시된다.
 - T1.4 발언 전문 검색: `build-site`가 `site/search/index-{연도}.json` 샤드를
   생성한다(필드: utterance_id, person_id, person_name, spoken_at, text). `search.html`
   페이지: 두 글자 이상 입력 시 연도 샤드를 최신부터 lazy load하며 부분 문자열
