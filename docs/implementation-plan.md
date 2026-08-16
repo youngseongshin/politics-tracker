@@ -24,14 +24,14 @@
 | `politics-tracker parse-minutes` | 텍스트 파일에서 발언 추출 | 동작 |
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
-| `pytest` | 테스트 38건 | 전부 통과 |
+| `pytest` | 테스트 42건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
 ```text
 politics_tracker/
 ├── models.py              Person / Utterance. 출처 URL 없는 발언은 생성자에서 예외
-├── storage.py             JSONL 저장소 (M2에서 SQLite로 전환)
+├── storage.py             SQLite 운영 저장소 + JSONL 교환 저장소
 ├── matching.py            화자 매칭. 동명이인은 person_id를 붙이지 않고 보류
 ├── sources/
 │   ├── minutes_parser.py  회의록 발언자 마커(◯·○·〇) 규칙 파싱
@@ -41,7 +41,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     38건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     42건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -335,10 +335,17 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
   JSON 컬럼), 이후 마일스톤에서 stances, bills, votes, pledges, predictions,
   reviews, corrections를 추가한다. 인덱스: utterances(person_id, spoken_at),
   utterances(spoken_at). 기존 `Store`와 같은 메서드 시그니처를 유지한다.
+  **완료(2026-08-16):** people·utterances 테이블과 두 인덱스를 만들고 JSON payload와
+  topics JSON 컬럼을 함께 저장한다. upsert는 기존 payload 전체를 읽지 않고 SQLite의
+  ID 충돌 갱신을 사용한다. `Store`는 같은 메서드의 JSONL 교환 구현으로 남겼다.
 - T2.2 `migrate-store` 명령: JSONL 저장소를 SQLite로 이관한다. 역방향
   `export-jsonl`도 만든다(백업과 diff 용도. JSONL은 교환 포맷으로 유지).
+  **완료(2026-08-16):** 실데이터 인물 299명·발언 286건을 왕복해 두 JSONL 파일이
+  바이트 단위로 동일함을 확인했다.
 - T2.3 모든 CLI에 `--db`(기본 `data/db.sqlite`) 경로를 연결하고 테스트를 SQLite
   경로로 확장한다.
+  **완료(2026-08-16):** quickstart와 수집·분류·빌드의 기본 경로를 SQLite로 바꾸고
+  Pages 배치도 같은 경로를 사용하도록 전환했다.
 - 완료 기준: 전체 파이프라인이 SQLite로 동작하고, JSONL 왕복(export 후 import)이
   무손실임을 테스트로 보인다.
 

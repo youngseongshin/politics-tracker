@@ -47,7 +47,7 @@ jobs:
           politics-tracker classify-topics --backend rules
 
       - name: Build static site from the real-data store
-        run: politics-tracker build-site --store data/store --out site_out
+        run: politics-tracker build-site --out site_out
 
       - name: Disable Jekyll processing
         run: touch site_out/.nojekyll

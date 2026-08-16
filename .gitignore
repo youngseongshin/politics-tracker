@@ -4,5 +4,9 @@ __pycache__/
 .pytest_cache/
 data/raw/
 data/store/
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/export/
 quickstart_out/
 site_out/

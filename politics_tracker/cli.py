@@ -27,7 +27,10 @@ from .sources.assembly_api import (
     DEFAULT_PLENARY_MINUTES_SERVICE_ID,
 )
 from .sources.minutes_parser import parse_minutes_text, speeches_to_utterances
-from .storage import Store
+from .storage import SqliteStore, Store
+
+
+DEFAULT_DB_PATH = "data/db.sqlite"
 
 
 def _now_iso() -> str:
@@ -60,7 +63,7 @@ def cmd_quickstart(args: argparse.Namespace) -> int:
     stats = match_utterances(utterances, people)
     topic_stats = classify_rules(utterances)
 
-    store = Store(out / "data")
+    store = SqliteStore(out / "data" / "db.sqlite")
     store.save_people(people)
     store.save_utterances(utterances)
     site_stats = build_site(people, utterances, out / "site")
@@ -89,9 +92,9 @@ def cmd_fetch_members(args: argparse.Namespace) -> int:
     raw_out.parent.mkdir(parents=True, exist_ok=True)
     raw_out.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    store = Store(args.store)
+    store = SqliteStore(args.db)
     store.save_people(people)
-    print(f"{len(people)}명 수집 → {store.people_path} (원본: {raw_out})")
+    print(f"{len(people)}명 수집 → {store.db_path} (원본: {raw_out})")
     return 0
 
 
@@ -109,7 +112,7 @@ def cmd_parse_minutes(args: argparse.Namespace) -> int:
             "retrieved_at": _now_iso(),
         },
     )
-    store = Store(args.store)
+    store = SqliteStore(args.db)
     stats = match_utterances(utterances, store.load_people())
     added = store.upsert_utterances(utterances)
     print(f"발언 {len(utterances)}건 파싱 (신규 {added}건) — "
@@ -154,7 +157,7 @@ def cmd_fetch_minutes(args: argparse.Namespace) -> int:
         print(f"\n총 {len(records)}건. 필드 확인: 첫 row 키 = {list(records[0].raw.keys()) if records else '없음'}")
         return 0
 
-    store = Store(args.store)
+    store = SqliteStore(args.db)
     people = store.load_people()
     snapshot_dir = Path(args.snapshot_dir)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -201,7 +204,7 @@ def cmd_fetch_minutes(args: argparse.Namespace) -> int:
 
 
 def cmd_classify_topics(args: argparse.Namespace) -> int:
-    store = Store(args.store)
+    store = SqliteStore(args.db)
     utterances = store.load_utterances()
     if not utterances:
         print("저장소에 발언이 없습니다.", file=sys.stderr)
@@ -287,7 +290,7 @@ def cmd_verify_api(args: argparse.Namespace) -> int:
 
 
 def cmd_build_site(args: argparse.Namespace) -> int:
-    store = Store(args.store)
+    store = SqliteStore(args.db)
     people = store.load_people()
     utterances = store.load_utterances()
     if not people:
@@ -296,6 +299,34 @@ def cmd_build_site(args: argparse.Namespace) -> int:
     stats = build_site(people, utterances, args.out)
     print(f"인물 페이지 {stats.people_pages}개, 발언 {stats.utterances_rendered}건 렌더링 "
           f"(미귀속 {stats.unmatched_utterances}건) -> {Path(args.out) / 'index.html'}")
+    return 0
+
+
+def cmd_migrate_store(args: argparse.Namespace) -> int:
+    source = Store(args.store)
+    if not source.people_path.is_file() or not source.utterances_path.is_file():
+        print(
+            f"JSONL 저장소가 완전하지 않습니다: {source.people_path}, {source.utterances_path}",
+            file=sys.stderr,
+        )
+        return 1
+    people = source.load_people()
+    utterances = source.load_utterances()
+    target = SqliteStore(args.db)
+    target.save_people(people)
+    target.save_utterances(utterances)
+    print(f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건 → {target.db_path}")
+    return 0
+
+
+def cmd_export_jsonl(args: argparse.Namespace) -> int:
+    source = SqliteStore(args.db)
+    people = source.load_people()
+    utterances = source.load_utterances()
+    target = Store(args.out)
+    target.save_people(people)
+    target.save_utterances(utterances)
+    print(f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건 → {target.root}")
     return 0
 
 
@@ -318,7 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--era-param", default=None,
                    help="커스텀 명부 서비스의 대수 필터 파라미터명 (현역 기본 서비스는 불필요)")
     f.add_argument("--raw-out", default="data/raw/members.json")
-    f.add_argument("--store", default="data/store")
+    f.add_argument("--db", default=DEFAULT_DB_PATH)
     f.set_defaults(func=cmd_fetch_members)
 
     m = sub.add_parser("parse-minutes", help="회의록 텍스트 파일에서 발언 추출 후 저장소에 병합")
@@ -328,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--source-url", required=True, help="회의록 원문 URL")
     m.add_argument("--venue-type", default="assembly_plenary",
                    help="assembly_plenary | assembly_committee | ...")
-    m.add_argument("--store", default="data/store")
+    m.add_argument("--db", default=DEFAULT_DB_PATH)
     m.set_defaults(func=cmd_parse_minutes)
 
     fm = sub.add_parser("fetch-minutes", help="회의록 목록 조회 → 원문 다운로드 → 발언 추출 → 저장소 병합")
@@ -345,7 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="다운로드 없이 목록과 필드만 출력 (서비스 ID·필드 확인용)")
     fm.add_argument("--venue-type", default="assembly_plenary")
     fm.add_argument("--snapshot-dir", default="data/raw/minutes", help="원문 스냅샷 보관 경로")
-    fm.add_argument("--store", default="data/store")
+    fm.add_argument("--db", default=DEFAULT_DB_PATH)
     fm.set_defaults(func=cmd_fetch_minutes)
 
     c = sub.add_parser("classify-topics", help="저장소의 발언에 주제 태그 부여")
@@ -355,7 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--batch-size", type=int, default=20)
     c.add_argument("--confidence-threshold", type=float, default=0.6,
                    help="이 값 미만이면 주제를 붙이지 않고 보류")
-    c.add_argument("--store", default="data/store")
+    c.add_argument("--db", default=DEFAULT_DB_PATH)
     c.set_defaults(func=cmd_classify_topics)
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
@@ -367,9 +398,19 @@ def build_parser() -> argparse.ArgumentParser:
     v.set_defaults(func=cmd_verify_api)
 
     b = sub.add_parser("build-site", help="저장소 데이터로 정적 사이트 생성")
-    b.add_argument("--store", default="data/store")
+    b.add_argument("--db", default=DEFAULT_DB_PATH)
     b.add_argument("--out", default="site_out")
     b.set_defaults(func=cmd_build_site)
+
+    migrate = sub.add_parser("migrate-store", help="기존 JSONL 저장소를 SQLite로 이관")
+    migrate.add_argument("--store", default="data/store", help="people.jsonl이 있는 기존 저장소")
+    migrate.add_argument("--db", default=DEFAULT_DB_PATH)
+    migrate.set_defaults(func=cmd_migrate_store)
+
+    export = sub.add_parser("export-jsonl", help="SQLite를 JSONL 교환 포맷으로 내보내기")
+    export.add_argument("--db", default=DEFAULT_DB_PATH)
+    export.add_argument("--out", default="data/export")
+    export.set_defaults(func=cmd_export_jsonl)
 
     return p
 

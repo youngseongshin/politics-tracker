@@ -61,6 +61,14 @@ politics-tracker classify-topics --backend claude
 politics-tracker build-site --out ./site_out
 ```
 
+운영 저장소 기본값은 `data/db.sqlite`입니다. 기존 JSONL 저장소를 옮기거나 교환용
+백업을 만들 때는 다음 명령을 사용합니다.
+
+```bash
+politics-tracker migrate-store --store data/store --db data/db.sqlite
+politics-tracker export-jsonl --db data/db.sqlite --out data/export
+```
+
 `fetch-minutes`는 국회회의록시스템의 구조화 HTML에서 서버가 표시한 화자·직함·발언을
 읽습니다. 구조화 HTML이 없는 과거 문서는 PDF/텍스트 규칙 파서로 폴백합니다.
 다운로드한 원문은 `data/raw/minutes/`에 스냅샷으로 보관하고 발언의
@@ -80,7 +88,7 @@ GitHub Actions에서 수집할 때는 저장소 Actions Secret에 `ASSEMBLY_API_
 ```text
 politics_tracker/
 ├── models.py              Person / Utterance — 출처 없는 발언은 생성 불가
-├── storage.py             JSONL 저장소 (스키마 안정화 후 Postgres로)
+├── storage.py             SQLite 운영 저장소 + JSONL 마이그레이션·교환 포맷
 ├── matching.py            화자→인물 매칭 (동명이인은 확정하지 않고 보류)
 ├── sources/
 │   ├── minutes_parser.py  회의록 발언자 마커(◯) 규칙 파싱 — Phase 0의 핵심
