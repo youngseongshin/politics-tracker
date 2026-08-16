@@ -50,8 +50,9 @@ def _analysis_for_report(report):
 def test_curated_ai_report_has_editorial_depth_and_no_em_dash():
     report = load_ai_qualitative_report()
 
-    assert len(report["themes"]) >= 10
-    assert sum(len(theme["evidence"]) for theme in report["themes"]) >= 30
+    assert report["reviewed_through"] == "2026-08-12"
+    assert len(report["themes"]) == 12
+    assert sum(len(theme["evidence"]) for theme in report["themes"]) == 49
     assert len(report["chronology"]) == 4
     assert len(report["cross_cutting"]) >= 4
     assert all(len(theme["discussions"]) >= 2 for theme in report["themes"])
