@@ -12,8 +12,12 @@
 
 ## 빠른 시작 (네트워크·API 키 불필요)
 
+Python 3.10 이상이 필요합니다. macOS의 기본 `python3`가 3.9인 환경에서는
+Homebrew 등으로 설치한 `python3.11`을 사용하세요.
+
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
+python3.11 -m venv .venv && . .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e ".[dev]"
 politics-tracker quickstart --out ./quickstart_out
 # quickstart_out/site/index.html 을 브라우저로 열기

@@ -62,6 +62,14 @@ tests/                     26건. LLM은 FakeClient 주입 패턴(test_topics.py
 6. 재실행 멱등. 수집·분류·빌드 어느 단계든 두 번 실행해도 결과가 같다.
 7. 판정 후 불변. 예측·공약 판정은 확정 후 수정 불가, 고침은 새 레코드와 정정 이력으로만.
 
+### 0.5 확정된 운영 결정
+
+- 2026-08-16: M0 시작 전에 `youngseongshin/politics-tracker` 독립 공개 저장소로
+  분리한다. 기존 `thesis-investment-os`의 `politics-tracker/` 커밋 이력은 보존한다.
+- GitHub Pages는 우선 기본 프로젝트 주소
+  `https://youngseongshin.github.io/politics-tracker/`를 사용한다. 별도 도메인 전환은
+  프로젝트 명칭과 운영 주체를 확정한 뒤 별도 결정한다.
+
 ---
 
 ## 1. 작업 계약 (전 마일스톤 공통)
@@ -107,7 +115,7 @@ tests/                     26건. LLM은 FakeClient 주입 패턴(test_topics.py
 
 | 시점 | 결정 |
 |---|---|
-| M0 | politics-tracker의 독립 저장소 분리 여부와 시점, GitHub Pages 도메인 |
+| M0 | **완료**: M0 전 독립 저장소 분리, 기본 GitHub Pages 프로젝트 주소 사용 (§0.5) |
 | M1 종료 | LLM 백필 실행 여부와 비용 상한 |
 | M4 착수 | 입장 축 초기 목록(§3.2 초안)의 승인 |
 | M6 착수 | 공약 추적 대상 인물의 우선순위(전원 또는 주요 인물 선별) |
