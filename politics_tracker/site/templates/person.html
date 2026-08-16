@@ -3,7 +3,7 @@
 {% block content %}
 <h1>{{ person.name }}</h1>
 <p class="lead">
-  {{ person.party or "정당 정보 없음" }}{% if person.district %} · {{ person.district }}{% endif %}{% if person.era %} · 제{{ person.era }}대{% endif %}{% if person.committees %} · {{ person.committees | join(", ") }}{% endif %}
+  {{ person.party or "정당 정보 없음" }}{% if person.district %} · {{ person.district }}{% endif %}{% if person.era %} · {% if "대" in person.era %}{{ person.era }}{% else %}제{{ person.era }}대{% endif %}{% endif %}{% if person.committees %} · {{ person.committees | join(", ") }}{% endif %}
   · 수록 발언 <span class="num">{{ utterance_count }}</span>건
 </p>
 
@@ -12,7 +12,7 @@
 {% endif %}
 
 {% for group in groups %}
-<div class="day"><span class="num">{{ group.spoken_at }}</span><span class="session">{{ group.session }}</span></div>
+<div class="day"><span class="num">{{ group.spoken_at }}</span><span class="session">{{ group.session }}{% if group.committee and group.committee not in group.session %} · {{ group.committee }}{% endif %}</span></div>
   {% for u in group.utterances %}
   <div class="utt">
     <div class="who">{{ u.speaker_name }}{% if u.speaker_role %}<span class="role">{{ u.speaker_role }}</span>{% endif %}

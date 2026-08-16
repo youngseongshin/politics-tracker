@@ -16,7 +16,8 @@
       "required": ["type"],
       "properties": {
         "type": { "type": "string", "enum": ["assembly_plenary", "assembly_committee", "gov_briefing", "press_quote", "other"] },
-        "session": { "type": "string" }
+        "session": { "type": "string" },
+        "committee": { "type": "string", "description": "위원회 회의록일 때의 공식 위원회명" }
       }
     },
     "text": { "type": "string" },

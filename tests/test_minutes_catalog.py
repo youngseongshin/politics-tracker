@@ -1,9 +1,13 @@
 from io import BytesIO
 
 from politics_tracker.sources.minutes_catalog import (
+    MinutesRecord,
+    committee_from_title,
     document_suffix,
     extract_speeches,
     extract_text,
+    load_minutes_document,
+    meeting_content_matches,
     normalize_minutes_row,
     parse_viewer_html,
     unique_minutes_records,
@@ -30,6 +34,19 @@ def test_normalize_official_row_prefers_structured_viewer_and_keeps_pdf():
     assert r.pdf_url.endswith("pdf.do?id=57050")
     assert r.meeting_id == "N054334"
     assert r.raw == row  # 원본 보존
+
+
+def test_normalize_committee_prefers_official_field_and_falls_back_to_title():
+    official = normalize_minutes_row(
+        {
+            "TITLE": "제22대 제438회 제2차 기후위기특별위원회 탄소중립기본법심사소위원회",
+            "COMM_NAME": "기후위기특별위원회",
+        }
+    )
+    assert official.committee == "기후위기특별위원회"
+    assert committee_from_title("제22대 제438회 제1차 외교통일위원회 (2026년 08월 11일)") == "외교통일위원회"
+    assert committee_from_title("제418회 국회(정기회) 제3차 국토교통위원회회의록") == "국토교통위원회"
+    assert committee_from_title("제22대 제438회 제1차 국회본회의") is None
 
 
 def test_normalize_row_unknown_field_names():
@@ -80,6 +97,66 @@ def test_parse_viewer_html_uses_server_speaker_metadata():
     ]
     assert speeches[0].text == "첫 문장입니다.\n(박수)"
     assert speeches[1].order == 1
+
+
+def test_meeting_content_guard_rejects_wrong_viewer_meeting():
+    expected = MinutesRecord(
+        date="2026-08-11",
+        title="제22대 제438회 제1차 외교통일위원회",
+        committee="외교통일위원회",
+        doc_url="https://example.invalid/view",
+    )
+    correct = VIEWER_HTML.replace(
+        "<body>",
+        "<body><h2>제22대국회 제438회 제1차 외교통일위원회 <span>(2026.08.11.)</span></h2>",
+    ).encode()
+    wrong = VIEWER_HTML.replace(
+        "<body>",
+        "<body><h2>제19대국회 제337회 제1차 국방위원회 <span>(2015.09.22.)</span></h2>",
+    ).encode()
+    assert meeting_content_matches(correct, expected)
+    assert not meeting_content_matches(wrong, expected)
+
+
+def test_load_minutes_document_reuses_only_valid_cached_snapshot(tmp_path):
+    record = MinutesRecord(
+        date="2026-08-11",
+        title="제22대 제438회 제1차 외교통일위원회",
+        committee="외교통일위원회",
+        doc_url="https://example.invalid/view",
+    )
+    wrong = VIEWER_HTML.replace(
+        "<body>",
+        "<body><h2>제19대국회 제337회 제1차 국방위원회 <span>(2015.09.22.)</span></h2>",
+    ).encode()
+    correct = VIEWER_HTML.replace(
+        "<body>",
+        "<body><h2>제22대국회 제438회 제1차 외교통일위원회 <span>(2026.08.11.)</span></h2>",
+    ).encode()
+    (tmp_path / "2026-08-11_39daa5a26d78.html").write_bytes(wrong)
+    calls: list[str] = []
+
+    def fake_download(url):
+        calls.append(url)
+        return correct
+
+    speeches, snapshot, retrieved_at = load_minutes_document(
+        record, tmp_path, downloader=fake_download
+    )
+    assert len(speeches) == 2
+    assert calls == [record.doc_url]
+    assert meeting_content_matches(snapshot.read_bytes(), record)
+    assert retrieved_at.endswith("Z")
+
+    def fail_download(url):
+        raise AssertionError("유효한 캐시가 있으면 네트워크를 다시 호출하지 않는다")
+
+    cached_speeches, cached_snapshot, cached_at = load_minutes_document(
+        record, tmp_path, downloader=fail_download
+    )
+    assert len(cached_speeches) == 2
+    assert cached_snapshot == snapshot
+    assert cached_at == retrieved_at
 
 
 def test_extract_speeches_prefers_html_and_falls_back_to_marker_text():

@@ -11,7 +11,6 @@ verify-api는 실제 API 키로 연결·필드매핑을 점검한다 (로컬에�
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -121,9 +120,7 @@ def cmd_parse_minutes(args: argparse.Namespace) -> int:
 def cmd_fetch_minutes(args: argparse.Namespace) -> int:
     from .sources.assembly_api import AssemblyOpenAPI
     from .sources.minutes_catalog import (
-        document_suffix,
-        download_document,
-        extract_speeches,
+        load_minutes_document,
         normalize_minutes_row,
     )
 
@@ -169,19 +166,9 @@ def cmd_fetch_minutes(args: argparse.Namespace) -> int:
             skipped += 1
             continue
         try:
-            content = download_document(r.doc_url)
+            speeches, snapshot, retrieved_at = load_minutes_document(r, snapshot_dir)
         except Exception as e:
-            print(f"다운로드 실패 {r.doc_url}: {e}", file=sys.stderr)
-            skipped += 1
-            continue
-
-        digest = hashlib.sha256(r.doc_url.encode("utf-8")).hexdigest()[:12]
-        snapshot = snapshot_dir / f"{r.date}_{digest}{document_suffix(content)}"
-        snapshot.write_bytes(content)
-
-        speeches = extract_speeches(content)
-        if not speeches:
-            print(f"발언 마커 없음, 건너뜀: {r.title} ({r.doc_url})", file=sys.stderr)
+            print(f"원문 검증 실패, 건너뜀: {r.title} ({e})", file=sys.stderr)
             skipped += 1
             continue
 
@@ -192,7 +179,7 @@ def cmd_fetch_minutes(args: argparse.Namespace) -> int:
             "kind": "assembly_minutes",
             "url": r.doc_url,
             "title": r.title,
-            "retrieved_at": _now_iso(),
+            "retrieved_at": retrieved_at,
             "archived_snapshot": str(snapshot),
         }
         if r.pdf_url:

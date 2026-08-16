@@ -12,10 +12,14 @@ PDF/텍스트 추출과 minutes_parser 규칙으로 폴백한다.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from html import unescape
 from html.parser import HTMLParser
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -73,6 +77,22 @@ def _first_string(row: dict[str, Any], keys: list[str]) -> str | None:
     return None
 
 
+def committee_from_title(title: str | None) -> str | None:
+    """공식 위원회 필드가 없을 때 회의명에서 상위 위원회명을 보수적으로 찾는다."""
+    if not title:
+        return None
+    candidate = title.strip()
+    for pattern in (
+        r"^제\d+대\s*",
+        r"^제\d+회\s*",
+        r"^국회(?:\([^)]*\))?\s*",
+        r"^제\d+차\s*",
+    ):
+        candidate = re.sub(pattern, "", candidate).strip()
+    match = re.match(r"(.+?위원회)(?:회의록|\s|\(|$)", candidate)
+    return match.group(1).strip() if match else None
+
+
 def normalize_minutes_row(row: dict[str, Any]) -> MinutesRecord:
     """열린국회정보 row를 구조화 HTML 원문 중심으로 정규화한다.
 
@@ -107,6 +127,7 @@ def normalize_minutes_row(row: dict[str, Any]) -> MinutesRecord:
         doc_url = pdf_url or (urls[0] if urls else None)
 
     title = _first_string(row, _TITLE_KEYS)
+    committee = _first_string(row, ["COMM_NAME", "CMIT_NM"])
 
     return MinutesRecord(
         date=date,
@@ -114,7 +135,7 @@ def normalize_minutes_row(row: dict[str, Any]) -> MinutesRecord:
         doc_url=doc_url,
         pdf_url=pdf_url,
         meeting_id=_first_string(row, ["CONF_ID", "CONFER_NUM"]),
-        committee=_first_string(row, ["COMM_NAME", "CMIT_NM"]),
+        committee=committee or committee_from_title(title),
         raw=dict(row),
     )
 
@@ -140,6 +161,99 @@ def download_document(url: str, timeout: float = 60.0) -> bytes:
     resp = requests.get(url, headers=_UA, timeout=timeout)
     resp.raise_for_status()
     return resp.content
+
+
+def _viewer_heading(text: str) -> str | None:
+    match = re.search(r"<h2\b[^>]*>(.*?)</h2>", text, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None
+    without_tags = re.sub(r"<[^>]+>", " ", match.group(1))
+    return " ".join(unescape(without_tags).split()) or None
+
+
+def meeting_content_matches(content: bytes, record: MinutesRecord) -> bool:
+    """뷰어가 간헐적으로 다른 회의를 반환하는 경우를 식별정보로 차단한다."""
+    if content[:5] == b"%PDF-":
+        return True
+    text = extract_text(content)
+    head = text[:4096].lower()
+    if "<html" not in head and "<!doctype html" not in head:
+        return True
+    heading = _viewer_heading(text)
+    if not heading:
+        return False
+
+    expected_tokens = re.findall(r"제\d+(?:대|회|차)", record.title or "")
+    if any(token not in heading for token in expected_tokens):
+        return False
+    if record.committee and record.committee not in heading:
+        return False
+    if record.date:
+        date_digits = record.date.replace("-", "")
+        heading_digits = re.sub(r"\D", "", heading)
+        if date_digits not in heading_digits:
+            return False
+    return True
+
+
+def load_minutes_document(
+    record: MinutesRecord,
+    snapshot_dir: str | Path,
+    *,
+    downloader=None,
+) -> tuple[list[Speech], Path, str]:
+    """검증된 스냅샷을 재사용하고 성공한 새 원문만 원자적으로 교체한다.
+
+    반환값은 발언 목록, 스냅샷 경로, 최초 저장 시각이다. 구조화 HTML이 비었거나
+    다른 회의라면 공식 PDF를 폴백으로 시도한다.
+    """
+    if not (record.date and record.doc_url):
+        raise ValueError("회의 날짜와 원문 URL이 필요합니다")
+    fetch = downloader or download_document
+    out = Path(snapshot_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(record.doc_url.encode("utf-8")).hexdigest()[:12]
+    prefix = f"{record.date}_{digest}"
+
+    for cached in sorted(out.glob(f"{prefix}.*")):
+        content = cached.read_bytes()
+        if not meeting_content_matches(content, record):
+            continue
+        speeches = extract_speeches(content)
+        if speeches:
+            retrieved_at = datetime.fromtimestamp(
+                cached.stat().st_mtime, timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return speeches, cached, retrieved_at
+
+    errors: list[str] = []
+    urls = [record.doc_url]
+    if record.pdf_url and record.pdf_url != record.doc_url:
+        urls.append(record.pdf_url)
+    for url in urls:
+        try:
+            content = fetch(url)
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+            continue
+        if not meeting_content_matches(content, record):
+            errors.append(f"{url}: 회의 식별정보 불일치")
+            continue
+        speeches = extract_speeches(content)
+        if not speeches:
+            errors.append(f"{url}: 발언 마커 없음")
+            continue
+
+        snapshot = out / f"{prefix}{document_suffix(content)}"
+        temporary = snapshot.with_suffix(snapshot.suffix + ".tmp")
+        temporary.write_bytes(content)
+        temporary.replace(snapshot)
+        retrieved_at = datetime.fromtimestamp(
+            snapshot.stat().st_mtime, timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return speeches, snapshot, retrieved_at
+
+    raise ValueError("; ".join(errors) or "검증 가능한 회의록 원문이 없습니다")
 
 
 class _ViewerHTMLSpeechParser(HTMLParser):

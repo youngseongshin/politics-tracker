@@ -5,7 +5,13 @@ from politics_tracker.site.build import build_site
 
 def test_build_site_renders_person_timeline_with_source_links(tmp_path):
     people = [
-        Person(person_id="p1", name="이가상", party="가상당", district="서울 예시구갑"),
+        Person(
+            person_id="p1",
+            name="이가상",
+            party="가상당",
+            district="서울 예시구갑",
+            era="제20대, 제21대, 제22대",
+        ),
         Person(person_id="p2", name="박사례", party="예시당"),
     ]
     utterances = [
@@ -18,6 +24,23 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
             text="공급 확대가 필요합니다.",
             source={"kind": "assembly_minutes", "url": "https://example.invalid/minutes/1",
                     "title": "가상 회의록"},
+        ),
+        Utterance(
+            utterance_id="u3",
+            speaker_name="이가상",
+            speaker_role="위원",
+            spoken_at="2026-07-14",
+            venue={
+                "type": "assembly_committee",
+                "session": "제400회 국회 제2차 회의",
+                "committee": "국토교통위원회",
+            },
+            text="위원회 발언입니다.",
+            source={
+                "kind": "assembly_minutes",
+                "url": "https://example.invalid/minutes/committee-1",
+                "title": "가상 위원회 회의록",
+            },
         ),
         Utterance(
             utterance_id="u2",
@@ -33,7 +56,7 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
     stats = build_site(people, utterances, tmp_path)
 
     assert stats.people_pages == 2
-    assert stats.utterances_rendered == 1
+    assert stats.utterances_rendered == 2
     assert stats.unmatched_utterances == 1
 
     index = (tmp_path / "index.html").read_text(encoding="utf-8")
@@ -41,6 +64,10 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
 
     p1 = (tmp_path / "person" / "p1.html").read_text(encoding="utf-8")
     assert "공급 확대가 필요합니다." in p1
+    assert "제제20대" not in p1
+    assert "제20대, 제21대, 제22대" in p1
+    assert "국토교통위원회" in p1
+    assert "위원회 발언입니다." in p1
     assert "https://example.invalid/minutes/1" in p1  # 발언마다 원문 링크
 
     p2 = (tmp_path / "person" / "p2.html").read_text(encoding="utf-8")

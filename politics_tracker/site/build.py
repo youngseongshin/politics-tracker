@@ -38,16 +38,25 @@ def _env() -> Environment:
 
 def _timeline_groups(utterances: list[Utterance]) -> list[dict]:
     """발언을 (날짜, 회의) 단위로 묶어 최신순 타임라인으로 만든다."""
-    groups: dict[tuple[str, str], list[Utterance]] = defaultdict(list)
+    groups: dict[tuple[str, str, str], list[Utterance]] = defaultdict(list)
     for u in utterances:
-        groups[(u.spoken_at, u.venue.get("session", ""))].append(u)
+        groups[
+            (
+                u.spoken_at,
+                u.venue.get("session", ""),
+                u.venue.get("committee", ""),
+            )
+        ].append(u)
 
     ordered = []
-    for (spoken_at, session), items in sorted(groups.items(), key=lambda kv: kv[0][0], reverse=True):
+    for (spoken_at, session, committee), items in sorted(
+        groups.items(), key=lambda kv: kv[0][0], reverse=True
+    ):
         ordered.append(
             {
                 "spoken_at": spoken_at,
                 "session": session,
+                "committee": committee,
                 "utterances": sorted(items, key=lambda u: u.order),
             }
         )

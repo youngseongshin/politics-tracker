@@ -24,7 +24,7 @@
 | `politics-tracker parse-minutes` | 텍스트 파일에서 발언 추출 | 동작 |
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
-| `pytest` | 테스트 34건 | 전부 통과 |
+| `pytest` | 테스트 37건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -41,7 +41,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     34건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     37건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -295,6 +295,10 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
   회의록 제목에서 위원회명을 추출해 `venue.committee`에 넣는다(정규식:
   "…위원회회의록" 패턴, 실측 후 확정). 사이트 타임라인의 회의명 옆에 위원회명을 표시한다.
   수용 기준: 상임위 회의록 1건 이상이 실데이터로 파싱되어 사이트에 위원회명과 함께 나온다.
+  **완료(2026-08-16):** 제438회 제1차 외교통일위원회 회의록에서 발언 44건을
+  추출해 위원회명과 함께 렌더링했다. 공식 `COMM_NAME`을 우선하고 제목 정규식은
+  필드가 없는 과거 문서에만 사용한다. 뷰어의 오응답을 막는 회의 식별 검증과
+  검증된 스냅샷 우선 재사용도 추가했다.
 - T1.3 발언 퍼머링크: 인물 페이지의 각 발언 블록에 `id="{utterance_id}"` 앵커와
   우측 § 링크를 단다. `:target` 하이라이트 스타일(배경 틴트)을 추가한다.
   수용 기준: `person/X.html#utt_...` 직접 접근 시 해당 발언으로 이동하고 표시된다.
