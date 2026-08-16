@@ -23,6 +23,12 @@
       {% if row.utterance.venue.committee %} · {{ row.utterance.venue.committee }}{% endif %}
     </div>
     <p class="speech">{{ row.utterance.text }}</p>
+    {% for factcheck in factchecks_by_utterance.get(row.utterance.utterance_id, []) %}
+    <div class="record-note"><p>팩트체크: <a href="{{ factcheck.url }}" rel="noopener">{{ factcheck.organization }} “{{ factcheck.verdict_quote }}”</a> · <span class="num">{{ factcheck.checked_at }}</span></p></div>
+    {% endfor %}
+    {% for correction in corrections_by_target.get(row.utterance.utterance_id, []) %}
+    <div class="record-note"><p><strong>정정 {{ correction.status_label }}</strong> · <a href="../corrections.html#{{ correction.correction_id }}">공개 기록</a></p><p>{{ correction.public_note or correction.request_summary }}</p></div>
+    {% endfor %}
     <div class="srcline">출처: <a href="{{ row.utterance.source.url }}" rel="noopener">{{ row.utterance.source.title or "회의록 원문" }}</a></div>
   </article>
 {% endfor %}

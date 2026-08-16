@@ -52,6 +52,10 @@ jobs:
           politics-tracker compute-consistency
           politics-tracker pledge import data/pledges
           politics-tracker prediction import data/predictions
+          politics-tracker correction import data/corrections
+          politics-tracker audit-balance --as-of "$(date -u +%F)" \
+            --sample-size 21 --sample-errors 0 --sample-checked-at 2026-08-16 \
+            --sample-note "stance_rules_v2 공개 입장 21건의 방향을 원문과 대조"
 
       - name: Build static site from the real-data store
         run: politics-tracker build-site --out site_out

@@ -23,11 +23,13 @@ from .models import (
     Person,
     Pledge,
     Prediction,
+    Correction,
     ReviewItem,
     Stance,
     UtteranceBillLink,
     pledge_id_for,
     prediction_id_for,
+    correction_id_for,
     review_id_for,
 )
 from .site.build import build_site
@@ -261,6 +263,7 @@ def cmd_classify_topics(args: argparse.Namespace) -> int:
             model=args.model,
             batch_size=args.batch_size,
             confidence_threshold=args.confidence_threshold,
+            prompt_version=getattr(args, "prompt_version", "topic_v1"),
         )
 
     store.save_utterances(utterances)
@@ -272,6 +275,8 @@ def cmd_classify_topics(args: argparse.Namespace) -> int:
             payload = {
                 "topics": list(utterance.topics),
                 "topic_source": utterance.topic_source,
+                "topic_model": utterance.topic_model,
+                "topic_prompt_version": utterance.topic_prompt_version,
             }
             review = ReviewItem(
                 review_id=review_id_for(
@@ -750,6 +755,198 @@ def cmd_prediction_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _correction_target_ids(store: SqliteStore, target_kind: str) -> set[str]:
+    if target_kind == "utterance":
+        return {item.utterance_id for item in store.load_utterances()}
+    if target_kind == "stance":
+        return {item.stance_id for item in store.load_stances()}
+    if target_kind == "pledge":
+        return {item.pledge_id for item in store.load_pledges()}
+    if target_kind == "prediction":
+        return {item.prediction_id for item in store.load_predictions()}
+    return set()
+
+
+def cmd_correction_import(args: argparse.Namespace) -> int:
+    from .corrections import load_correction_path
+
+    store = SqliteStore(args.db)
+    try:
+        corrections = load_correction_path(args.path)
+    except (FileNotFoundError, OSError, KeyError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    target_ids: dict[str, set[str]] = {}
+    invalid = []
+    for correction in corrections:
+        if correction.target_kind not in target_ids:
+            target_ids[correction.target_kind] = _correction_target_ids(
+                store, correction.target_kind
+            )
+        if correction.target_id not in target_ids[correction.target_kind]:
+            invalid.append(correction.correction_id)
+    if invalid:
+        print(f"정정 대상을 찾을 수 없습니다: {', '.join(sorted(invalid))}", file=sys.stderr)
+        return 1
+    merged = []
+    for correction in corrections:
+        old = store.get_correction(correction.correction_id)
+        same_request = old and (
+            old.target_kind,
+            old.target_id,
+            old.requested_at,
+            old.request_summary,
+            old.channel,
+            old.channel_ref,
+        ) == (
+            correction.target_kind,
+            correction.target_id,
+            correction.requested_at,
+            correction.request_summary,
+            correction.channel,
+            correction.channel_ref,
+        )
+        if same_request and old.resolution is not None and correction.resolution is None:
+            merged.append(old)
+        else:
+            merged.append(correction)
+    try:
+        added = store.upsert_corrections(merged)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"정정 {len(corrections)}건 읽음, 신규 {added}건 → {store.db_path}")
+    return 0
+
+
+def cmd_correction_add(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    if args.target_id not in _correction_target_ids(store, args.target_kind):
+        print(
+            f"정정 대상을 찾을 수 없습니다: {args.target_kind} {args.target_id}",
+            file=sys.stderr,
+        )
+        return 1
+    existing = [
+        correction
+        for correction in store.load_corrections(
+            target_kind=args.target_kind, target_id=args.target_id
+        )
+        if correction.channel_ref == args.channel_ref.strip()
+    ]
+    if existing:
+        if len(existing) == 1 and existing[0].request_summary == args.request_summary.strip():
+            print(f"정정 동일 접수 확인: {existing[0].correction_id}")
+            return 0
+        print("같은 Issue 참조의 정정 접수 내용이 이미 존재합니다.", file=sys.stderr)
+        return 1
+    requested_at = args.requested_at or _now_iso()
+    try:
+        correction = Correction(
+            correction_id=correction_id_for(
+                args.target_kind, args.target_id, args.channel_ref, requested_at
+            ),
+            target_kind=args.target_kind,
+            target_id=args.target_id,
+            requested_at=requested_at,
+            request_summary=args.request_summary.strip(),
+            channel="github_issue",
+            channel_ref=args.channel_ref.strip(),
+            resolution=None,
+            resolved_at=None,
+            public_note=None,
+        )
+        added = store.upsert_corrections([correction])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    action = "접수" if added else "동일 접수 확인"
+    print(f"정정 {action}: {correction.correction_id}")
+    return 0
+
+
+def cmd_correction_resolve(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    correction = store.get_correction(args.correction_id)
+    if correction is None:
+        print(f"정정 기록을 찾을 수 없습니다: {args.correction_id}", file=sys.stderr)
+        return 1
+    resolved_at = args.resolved_at or _now_iso()
+    if correction.resolution is not None:
+        if (
+            correction.resolution == args.resolution
+            and correction.public_note == args.public_note.strip()
+            and (
+                args.resolved_at is None
+                or correction.resolved_at == args.resolved_at
+            )
+        ):
+            print(f"정정 동일 처리 확인: {correction.correction_id}")
+            return 0
+        print("이미 처리된 정정 기록은 변경할 수 없습니다.", file=sys.stderr)
+        return 1
+    try:
+        resolved = correction.with_resolution(
+            resolution=args.resolution,
+            resolved_at=resolved_at,
+            public_note=args.public_note.strip(),
+        )
+        store.upsert_corrections([resolved])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"정정 처리: {correction.correction_id} · {resolved.resolution}")
+    return 0
+
+
+def cmd_correction_list(args: argparse.Namespace) -> int:
+    corrections = SqliteStore(args.db).load_corrections(
+        target_kind=args.target_kind
+    )
+    for correction in corrections:
+        print(
+            f"{correction.correction_id}  {correction.status_label}  "
+            f"{correction.target_kind}:{correction.target_id}  "
+            f"{correction.channel_ref}"
+        )
+    print(f"총 {len(corrections)}건")
+    return 0
+
+
+def cmd_audit_balance(args: argparse.Namespace) -> int:
+    from .audit import build_balance_report
+
+    store = SqliteStore(args.db)
+    try:
+        report = build_balance_report(
+            store.load_people(),
+            store.load_utterances(),
+            store.load_stances(),
+            store.load_reviews(),
+            as_of=args.as_of or _now_iso()[:10],
+            sample_size=args.sample_size,
+            sample_errors=args.sample_errors,
+            sample_checked_at=getattr(args, "sample_checked_at", None),
+            sample_note=getattr(args, "sample_note", None),
+        )
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    corpus = report["corpus"]
+    print(
+        f"균형 감사 {report['as_of']}: 발언 {corpus['utterances']}건, "
+        f"화자 보류 {corpus['unmatched']}건 → {out}"
+    )
+    for row in report["parties"]:
+        print(f"{row['party']}: 인물 {row['people']}명, 귀속 발언 {row['utterances']}건")
+    return 0
+
+
 def cmd_verify_api(args: argparse.Namespace) -> int:
     """실제 API 키로 연결성·서비스 ID·필드 매핑을 점검한다. 로컬에서 실행."""
     from .sources.assembly_api import AssemblyAPIError, AssemblyOpenAPI, normalize_member
@@ -814,6 +1011,7 @@ def cmd_verify_api(args: argparse.Namespace) -> int:
 
 def cmd_build_site(args: argparse.Namespace) -> int:
     from .enrich.stances import load_stance_axes
+    from .factchecks import load_factchecks
 
     store = SqliteStore(args.db)
     people = store.load_people()
@@ -821,6 +1019,29 @@ def cmd_build_site(args: argparse.Namespace) -> int:
     if not people:
         print("저장소에 인물이 없습니다. fetch-members 또는 quickstart를 먼저 실행하세요.", file=sys.stderr)
         return 1
+    try:
+        factchecks = load_factchecks(args.factchecks)
+    except (OSError, KeyError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    utterance_ids = {utterance.utterance_id for utterance in utterances}
+    unknown_factchecks = sorted(
+        {item.utterance_id for item in factchecks} - utterance_ids
+    )
+    if unknown_factchecks:
+        print(
+            f"팩트체크 대상 발언을 찾을 수 없습니다: {', '.join(unknown_factchecks)}",
+            file=sys.stderr,
+        )
+        return 1
+    audit_report = None
+    audit_path = Path(args.audit_report)
+    if audit_path.is_file():
+        try:
+            audit_report = json.loads(audit_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"균형 감사 파일을 읽을 수 없습니다: {error}", file=sys.stderr)
+            return 1
     stats = build_site(
         people,
         utterances,
@@ -833,6 +1054,10 @@ def cmd_build_site(args: argparse.Namespace) -> int:
         consistency_pairs=store.load_consistency_pairs(),
         pledges=store.load_pledges(),
         predictions=store.load_predictions(),
+        factchecks=factchecks,
+        corrections=store.load_corrections(),
+        bill_links=store.load_bill_links(),
+        audit_report=audit_report,
     )
     print(f"인물 페이지 {stats.people_pages}개, 발언 {stats.utterances_rendered}건 렌더링 "
           f"(미귀속 {stats.unmatched_utterances}건) -> {Path(args.out) / 'index.html'}")
@@ -857,6 +1082,7 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     consistency_pairs = source.load_consistency_pairs()
     pledges = source.load_pledges()
     predictions = source.load_predictions()
+    corrections = source.load_corrections()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -868,12 +1094,13 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     target.save_consistency_pairs(consistency_pairs)
     target.save_pledges(pledges)
     target.save_predictions(predictions)
+    target.save_corrections(corrections)
     print(
         f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
         f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
         f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건, "
-        f"예측 {len(predictions)}건 → {target.db_path}"
+        f"예측 {len(predictions)}건, 정정 {len(corrections)}건 → {target.db_path}"
     )
     return 0
 
@@ -890,6 +1117,7 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     consistency_pairs = source.load_consistency_pairs()
     pledges = source.load_pledges()
     predictions = source.load_predictions()
+    corrections = source.load_corrections()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -901,12 +1129,13 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     target.save_consistency_pairs(consistency_pairs)
     target.save_pledges(pledges)
     target.save_predictions(predictions)
+    target.save_corrections(corrections)
     print(
         f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
         f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
         f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건, "
-        f"예측 {len(predictions)}건 → {target.root}"
+        f"예측 {len(predictions)}건, 정정 {len(corrections)}건 → {target.root}"
     )
     return 0
 
@@ -1203,6 +1432,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--backend", choices=["rules", "claude"], default="rules",
                    help="rules=키워드(기본, 오프라인) / claude=LLM 구조화 출력 (ANTHROPIC_API_KEY 필요)")
     c.add_argument("--model", default="claude-opus-5", help="claude 백엔드의 모델 ID")
+    c.add_argument("--prompt-version", default="topic_v1")
     c.add_argument("--batch-size", type=int, default=20)
     c.add_argument("--confidence-threshold", type=float, default=0.6,
                    help="이 값 미만이면 주제를 붙이지 않고 보류")
@@ -1345,6 +1575,60 @@ def build_parser() -> argparse.ArgumentParser:
     prediction_list.add_argument("--db", default=DEFAULT_DB_PATH)
     prediction_list.set_defaults(func=cmd_prediction_list)
 
+    correction = sub.add_parser("correction", help="GitHub Issue 정정 접수·처리 기록 관리")
+    correction_actions = correction.add_subparsers(
+        dest="correction_command", required=True
+    )
+
+    correction_import = correction_actions.add_parser(
+        "import", help="정정 YAML 파일 또는 디렉터리 적재"
+    )
+    correction_import.add_argument("path", nargs="?", default="data/corrections")
+    correction_import.add_argument("--db", default=DEFAULT_DB_PATH)
+    correction_import.set_defaults(func=cmd_correction_import)
+
+    correction_add = correction_actions.add_parser("add", help="정정 요청 접수")
+    correction_add.add_argument(
+        "--target-kind",
+        choices=["utterance", "stance", "pledge", "prediction"],
+        required=True,
+    )
+    correction_add.add_argument("--target-id", required=True)
+    correction_add.add_argument("--request-summary", required=True)
+    correction_add.add_argument("--channel-ref", required=True, help="예: issue #12")
+    correction_add.add_argument("--requested-at", default=None, help="ISO 8601 datetime")
+    correction_add.add_argument("--db", default=DEFAULT_DB_PATH)
+    correction_add.set_defaults(func=cmd_correction_add)
+
+    correction_resolve = correction_actions.add_parser("resolve", help="정정 처리 결과 확정")
+    correction_resolve.add_argument("correction_id")
+    correction_resolve.add_argument(
+        "--resolution", choices=["반영", "기각", "부분 반영"], required=True
+    )
+    correction_resolve.add_argument("--public-note", required=True)
+    correction_resolve.add_argument("--resolved-at", default=None, help="ISO 8601 datetime")
+    correction_resolve.add_argument("--db", default=DEFAULT_DB_PATH)
+    correction_resolve.set_defaults(func=cmd_correction_resolve)
+
+    correction_list = correction_actions.add_parser("list", help="정정 공개 기록 목록")
+    correction_list.add_argument(
+        "--target-kind",
+        choices=["utterance", "stance", "pledge", "prediction"],
+        default=None,
+    )
+    correction_list.add_argument("--db", default=DEFAULT_DB_PATH)
+    correction_list.set_defaults(func=cmd_correction_list)
+
+    audit = sub.add_parser("audit-balance", help="정당별 수집·보류·검수 균형 감사")
+    audit.add_argument("--as-of", default=None, help="감사 기준일 YYYY-MM-DD")
+    audit.add_argument("--sample-size", type=int, default=None)
+    audit.add_argument("--sample-errors", type=int, default=None)
+    audit.add_argument("--sample-checked-at", default=None, help="사람 표본 대조일 YYYY-MM-DD")
+    audit.add_argument("--sample-note", default=None)
+    audit.add_argument("--out", default="data/audits/balance-latest.json")
+    audit.add_argument("--db", default=DEFAULT_DB_PATH)
+    audit.set_defaults(func=cmd_audit_balance)
+
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")
     v.add_argument("--service-id", default=DEFAULT_MEMBER_SERVICE_ID)
@@ -1357,6 +1641,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--db", default=DEFAULT_DB_PATH)
     b.add_argument("--out", default="site_out")
     b.add_argument("--axes", default="config/stance_axes.yaml")
+    b.add_argument("--factchecks", default="data/factchecks.yaml")
+    b.add_argument("--audit-report", default="data/audits/balance-latest.json")
     b.set_defaults(func=cmd_build_site)
 
     migrate = sub.add_parser("migrate-store", help="기존 JSONL 저장소를 SQLite로 이관")

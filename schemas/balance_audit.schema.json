@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/balance_audit.schema.json",
+  "title": "BalanceAudit",
+  "type": "object",
+  "required": ["as_of", "corpus", "parties", "topics", "stances", "reviews", "sample_error_audit"],
+  "properties": {
+    "as_of": { "type": "string", "format": "date" },
+    "corpus": { "type": "object" },
+    "parties": { "type": "array", "items": { "type": "object" } },
+    "topics": { "type": "object" },
+    "stances": { "type": "object" },
+    "reviews": { "type": "array", "items": { "type": "object" } },
+    "sample_error_audit": { "type": "object" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,32 @@
+name: 정정 요청
+description: 발언·입장·공약·예측 기록의 오류나 맥락 누락을 알려 주세요.
+title: "[정정] "
+labels:
+  - correction
+body:
+  - type: markdown
+    attributes:
+      value: |
+        정정 요청과 처리 결과는 공개 기록으로 남습니다. 연락처나 공개하면 안 되는 개인정보는 적지 마세요. 접수 후 7일 안에 1차 회신합니다.
+  - type: input
+    id: target_url
+    attributes:
+      label: 대상 URL
+      description: 정정이 필요한 발언 또는 기록의 고유 URL을 붙여 주세요.
+      placeholder: https://youngseongshin.github.io/politics-tracker/person/...#utt_...
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: 요청 요지
+      description: 무엇이 잘못됐고 어떻게 바로잡아야 하는지 구체적으로 적어 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 근거
+      description: 원문, 공식 문서, 녹화물 등 확인 가능한 URL과 설명을 적어 주세요.
+    validations:
+      required: true

@@ -8,6 +8,7 @@ SSG로 렌더 레이어만 교체한다 — 데이터 레이어(JSONL/스키마)
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,19 +18,25 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..enrich.topics import TOPIC_LABELS
 from ..enrich.stances import StanceAxis, select_best_stances
+from ..audit import build_balance_report
 from ..models import (
     Bill,
     ConsistencyPair,
+    Correction,
+    FactCheckLink,
     Person,
     Pledge,
     Prediction,
     ReviewItem,
     Stance,
     Utterance,
+    UtteranceBillLink,
     Vote,
 )
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
+_REPOSITORY_URL = "https://github.com/youngseongshin/politics-tracker"
+_CORRECTION_FORM_URL = f"{_REPOSITORY_URL}/issues/new?template=correction.yml"
 
 
 @dataclass
@@ -371,6 +378,168 @@ def _predictions_by_person(
     return summaries
 
 
+def _factchecks_by_utterance(
+    factchecks: list[FactCheckLink],
+) -> dict[str, list[FactCheckLink]]:
+    grouped: dict[str, list[FactCheckLink]] = defaultdict(list)
+    for factcheck in factchecks:
+        grouped[factcheck.utterance_id].append(factcheck)
+    for rows in grouped.values():
+        rows.sort(key=lambda row: (row.checked_at, row.organization, row.url), reverse=True)
+    return grouped
+
+
+def _corrections_by_target(
+    corrections: list[Correction],
+) -> dict[str, list[Correction]]:
+    grouped: dict[str, list[Correction]] = defaultdict(list)
+    for correction in corrections:
+        grouped[correction.target_id].append(correction)
+    for rows in grouped.values():
+        rows.sort(key=lambda row: (row.requested_at, row.correction_id), reverse=True)
+    return grouped
+
+
+def _channel_url(channel_ref: str) -> str | None:
+    if channel_ref.startswith(("https://", "http://")):
+        return channel_ref
+    match = re.search(r"#(\d+)", channel_ref)
+    return f"{_REPOSITORY_URL}/issues/{match.group(1)}" if match else None
+
+
+def _correction_page_rows(
+    corrections: list[Correction],
+    people: list[Person],
+    utterances: list[Utterance],
+    stances: list[Stance],
+    axes: list[StanceAxis],
+    pledges: list[Pledge],
+    predictions: list[Prediction],
+) -> list[dict]:
+    people_by_id = {person.person_id: person for person in people}
+    utterance_by_id = {utterance.utterance_id: utterance for utterance in utterances}
+    axis_by_key = {axis.key: axis for axis in axes}
+    routes: dict[tuple[str, str], dict] = {}
+    for utterance in utterances:
+        person = people_by_id.get(utterance.person_id or "")
+        if person:
+            routes[("utterance", utterance.utterance_id)] = {
+                "href": f"person/{person.person_id}.html#{utterance.utterance_id}",
+                "label": f"{person.name} · {utterance.spoken_at} 발언",
+            }
+    for stance in stances:
+        utterance = utterance_by_id.get(stance.utterance_id)
+        person = people_by_id.get(stance.person_id)
+        axis = axis_by_key.get(stance.axis)
+        if utterance and person:
+            routes[("stance", stance.stance_id)] = {
+                "href": f"person/{person.person_id}.html#{utterance.utterance_id}",
+                "label": f"{person.name} · {axis.label if axis else stance.axis} 입장",
+            }
+    for pledge in pledges:
+        person = people_by_id.get(pledge.person_id)
+        if person:
+            routes[("pledge", pledge.pledge_id)] = {
+                "href": f"person/{person.person_id}.html#{pledge.pledge_id}",
+                "label": f"{person.name} · 공약",
+            }
+    for prediction in predictions:
+        person = people_by_id.get(prediction.person_id)
+        if person:
+            routes[("prediction", prediction.prediction_id)] = {
+                "href": f"person/{person.person_id}.html#{prediction.prediction_id}",
+                "label": f"{person.name} · 예측성 발언",
+            }
+
+    rows = [
+        {
+            "correction": correction,
+            "target": routes.get((correction.target_kind, correction.target_id)),
+            "channel_url": _channel_url(correction.channel_ref),
+        }
+        for correction in corrections
+    ]
+    rows.sort(
+        key=lambda row: (
+            row["correction"].requested_at,
+            row["correction"].correction_id,
+        ),
+        reverse=True,
+    )
+    return rows
+
+
+def _extractor_versions(
+    utterances: list[Utterance],
+    stances: list[Stance],
+    bill_links: list[UtteranceBillLink],
+    reviews: list[ReviewItem],
+) -> list[dict]:
+    versions = {
+        ("주제", "rules", "deterministic", "topic_rules_v1"),
+        ("주제", "claude", "실행 시 선택", "topic_v1"),
+        ("입장", "rules", "deterministic", "stance_rules_v2"),
+        ("입장", "claude", "실행 시 선택", "stance_v1"),
+        ("발언·의안", "rules", "deterministic", "bill_link_rules_v1"),
+        ("발언·의안", "claude", "실행 시 선택", "bill_link_v1"),
+        ("예측 후보", "rules", "deterministic", "prediction_rules_v2"),
+        ("예측 후보", "claude", "실행 시 선택", "prediction_v1"),
+    }
+    for utterance in utterances:
+        if utterance.topic_model and utterance.topic_prompt_version:
+            backend = "rules" if utterance.topic_model == "deterministic" else "claude"
+            versions.add(
+                (
+                    "주제",
+                    backend,
+                    utterance.topic_model,
+                    utterance.topic_prompt_version,
+                )
+            )
+    for stance in stances:
+        extractor = stance.extractor
+        versions.add(
+            (
+                "입장",
+                extractor["backend"],
+                extractor["model"],
+                extractor["prompt_version"],
+            )
+        )
+    for link in bill_links:
+        extractor = link.extractor
+        versions.add(
+            (
+                "발언·의안",
+                extractor["backend"],
+                extractor["model"],
+                extractor["prompt_version"],
+            )
+        )
+    for review in reviews:
+        extractor = review.payload.get("extractor")
+        if review.kind != "prediction" or not isinstance(extractor, dict):
+            continue
+        if {"backend", "model", "prompt_version"}.issubset(extractor):
+            versions.add(
+                (
+                    "예측 후보",
+                    extractor["backend"],
+                    extractor["model"],
+                    extractor["prompt_version"],
+                )
+            )
+    return [
+        {
+            "stage": stage,
+            "backend": backend,
+            "model": model,
+            "prompt_version": prompt_version,
+        }
+        for stage, backend, model, prompt_version in sorted(versions)
+    ]
+
+
 def build_site(
     people: list[Person],
     utterances: list[Utterance],
@@ -384,6 +553,10 @@ def build_site(
     consistency_pairs: list[ConsistencyPair] | None = None,
     pledges: list[Pledge] | None = None,
     predictions: list[Prediction] | None = None,
+    factchecks: list[FactCheckLink] | None = None,
+    corrections: list[Correction] | None = None,
+    bill_links: list[UtteranceBillLink] | None = None,
+    audit_report: dict | None = None,
 ) -> BuildStats:
     out = Path(out_dir)
     (out / "person").mkdir(parents=True, exist_ok=True)
@@ -397,11 +570,24 @@ def build_site(
     consistency_pairs = consistency_pairs or []
     pledges = pledges or []
     predictions = predictions or []
+    factchecks = factchecks or []
+    corrections = corrections or []
+    bill_links = bill_links or []
     consistency = _consistency_by_person(
         consistency_pairs, bills, votes, utterances, stances, stance_axes
     )
     pledge_summaries = _pledges_by_person(pledges)
     prediction_summaries = _predictions_by_person(predictions, utterances)
+    factchecks_by_utterance = _factchecks_by_utterance(factchecks)
+    corrections_by_target = _corrections_by_target(corrections)
+    if audit_report is None:
+        audit_report = build_balance_report(
+            people,
+            utterances,
+            stances,
+            reviews,
+            as_of=generated_at[:10],
+        )
 
     by_person: dict[str, list[Utterance]] = defaultdict(list)
     unmatched = 0
@@ -432,6 +618,8 @@ def build_site(
             consistency=consistency.get(person.person_id),
             pledge_summary=pledge_summaries.get(person.person_id),
             prediction_summary=prediction_summaries.get(person.person_id),
+            factchecks_by_utterance=factchecks_by_utterance,
+            corrections_by_target=corrections_by_target,
             generated_at=generated_at,
         )
         (out / "person" / f"{person.person_id}.html").write_text(html, encoding="utf-8")
@@ -454,8 +642,39 @@ def build_site(
     )
     (out / "index.html").write_text(index_html, encoding="utf-8")
 
-    about_html = env.get_template("about.html").render(root="", generated_at=generated_at)
+    about_html = env.get_template("about.html").render(
+        root="",
+        correction_form_url=_CORRECTION_FORM_URL,
+        generated_at=generated_at,
+    )
     (out / "about.html").write_text(about_html, encoding="utf-8")
+
+    correction_html = env.get_template("corrections.html").render(
+        root="",
+        rows=_correction_page_rows(
+            corrections,
+            people,
+            utterances,
+            stances,
+            stance_axes,
+            pledges,
+            predictions,
+        ),
+        correction_form_url=_CORRECTION_FORM_URL,
+        generated_at=generated_at,
+    )
+    (out / "corrections.html").write_text(correction_html, encoding="utf-8")
+
+    methodology_html = env.get_template("methodology.html").render(
+        root="",
+        axes=stance_axes,
+        audit=audit_report,
+        extractor_versions=_extractor_versions(
+            utterances, stances, bill_links, reviews
+        ),
+        generated_at=generated_at,
+    )
+    (out / "methodology.html").write_text(methodology_html, encoding="utf-8")
 
     search_shards = _write_search_shards(out, people, utterances)
     search_html = env.get_template("search.html").render(
@@ -477,6 +696,8 @@ def build_site(
             topic=topic,
             rows=rows,
             people=topic_people,
+            factchecks_by_utterance=factchecks_by_utterance,
+            corrections_by_target=corrections_by_target,
             generated_at=generated_at,
         )
         (topic_dir / f"{topic['key']}.html").write_text(html, encoding="utf-8")

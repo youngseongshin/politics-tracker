@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/factcheck.schema.json",
+  "title": "FactCheckLink",
+  "description": "발언에 연결하는 외부 팩트체크 기관의 판정 인용과 원문 링크.",
+  "type": "object",
+  "required": ["utterance_id", "organization", "verdict_quote", "url", "checked_at"],
+  "properties": {
+    "utterance_id": { "type": "string", "minLength": 1 },
+    "organization": { "type": "string", "minLength": 1 },
+    "verdict_quote": { "type": "string", "minLength": 1 },
+    "url": { "type": "string", "format": "uri" },
+    "checked_at": { "type": "string", "format": "date" }
+  },
+  "additionalProperties": false
+}

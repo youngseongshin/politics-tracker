@@ -26,24 +26,36 @@
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
 | `politics-tracker extract-stances` | 정책 축 입장 추출 | rules·Claude 페이크·인용구 가드 동작 |
-| `pytest` | 테스트 81건 | 전부 통과 |
+| `politics-tracker fetch-votes` | 처리 의안과 본회의 표결 수집 | 실 API와 멱등 재수집 검증 완료 |
+| `politics-tracker link-bills`, `compute-consistency` | 발언·의안 연결과 말·표 근거 쌍 계산 | 실데이터 근거 한 쌍 검증 완료 |
+| `politics-tracker pledge` | 공약 등록·상태 이력·YAML 임포트 | 근거·기준·append-only 검증 완료 |
+| `politics-tracker prediction` | 예측 후보·사람 등록·마감 후 판정 | rules·Claude 페이크·불변성 검증 완료 |
+| `politics-tracker correction` | 정정 접수·처리·YAML 임포트 | 통합 테스트 완료, 공개 요청은 아직 0건 |
+| `politics-tracker audit-balance` | 정당별 수집·보류·검수 균형 감사 | 5,140건 실데이터 감사 완료 |
+| `pytest` | 테스트 88건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
 ```text
 politics_tracker/
-├── models.py              Person / Utterance / ReviewItem / Stance. 출처·검수 불변성 강제
+├── models.py              발언·입장·표결·공약·예측·정정 모델과 불변성
 ├── storage.py             SQLite 운영 저장소 + JSONL 교환 저장소
 ├── matching.py            화자 매칭. 동명이인은 person_id를 붙이지 않고 보류
 ├── sources/
 │   ├── minutes_parser.py  회의록 발언자 마커(◯·○·〇) 규칙 파싱
 │   ├── minutes_catalog.py 회의록 목록 정규화, 구조화 HTML 파싱, PDF/텍스트 폴백
-│   └── assembly_api.py    열린국회정보 API 클라이언트, normalize_member
-├── enrich/topics.py       주제 14종, rules/claude 분류, 저신뢰 보류
-├── site/                  Jinja2 정적 사이트 (templates 4종)
+│   ├── assembly_api.py    열린국회정보 API 클라이언트, normalize_member
+│   └── votes.py           처리 의안·본회의 표결 정규화와 인물 매칭
+├── enrich/                주제·입장·의안·예측 rules/claude 추출
+├── pledges.py             공식 원문 대조 공약 YAML
+├── prediction_records.py  사람 확정 예측 YAML
+├── corrections.py         정정 접수·처리 YAML
+├── factchecks.py          외부 팩트체크 연결
+├── audit.py               균형 감사 집계
+├── site/                  Jinja2 정적 사이트 (templates 8종)
 └── samples/               quickstart용 가상 데이터
-schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     70건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+schemas/                   공개 레코드 JSON Schema (스키마가 SSOT)
+tests/                     88건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -122,7 +134,7 @@ tests/                     70건. LLM은 FakeClient 주입 패턴(test_topics.py
 | M1 종료 | LLM 백필 실행 여부와 비용 상한 |
 | M4 착수 | 입장 축 초기 목록(§3.2 초안)의 승인 |
 | M6 착수 | **완료**: 추적 인물 전원. 공식 원문 대조가 끝난 공약부터 증분 등록 |
-| M8 | 정정 요청 처리 기한 문구(초안: 접수 후 7일 내 1차 회신) |
+| M8 | **완료**: 접수 후 7일 안에 1차 회신 |
 
 ---
 
@@ -516,18 +528,36 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 - T8.1 팩트체크 연계: `data/factchecks.yaml` 수동 매핑(utterance_id, 기관명, 판정
   인용, URL, 날짜). 자체 판정 필드는 만들지 않는다. 발언 블록에
   `팩트체크: {기관} "{판정}"` 한 줄과 링크를 표시한다.
+  **완료(2026-08-16):** 외부 기관명·판정 인용·URL·날짜만 받는 스키마와 YAML
+  로더를 추가하고 인물·주제 발언 블록에 표시한다. 사이트 자체 판정 필드는 없다.
+  현재 공식 원문과 대조해 등록한 실매핑은 0건이며 가짜 판정을 공개하지 않았다.
 - T8.2 정정 채널: GitHub Issue 템플릿(대상 URL, 요청 요지, 근거)을 만들고,
   correction 레코드(§3.6)와 `correction` CLI를 만든다. 사이트에 `corrections.html`
   (전체 정정 이력)을 추가하고, 정정된 발언 블록에는 처리 결과 주석을 단다.
   소개 페이지의 "정정 창구는 준비 중" 문구를 실제 창구 안내로 교체한다(§1.3 문체 준수).
+  **완료(2026-08-16):** GitHub Issue 양식, 접수·처리·목록·YAML 임포트 CLI,
+  append-only SQLite·JSONL 저장소, `corrections.html`, 대상 항목 주석을 추가했다.
+  소개와 정정 페이지에 접수 후 7일 안에 1차 회신한다고 명시했다. 처리 확정 뒤에는
+  요청과 결과를 변경할 수 없다.
 - T8.3 방법론 페이지 확장: 축 정의 전문, 임계값 표(주제 0.6, 입장 0.7, 변화 감지
   0.8, 일치도 판정 가능 조건), 프롬프트 버전 목록, 지표 산식, 검수 통계(보류율,
   승인율)를 게시한다. 소개 페이지에서 링크한다.
+  **완료(2026-08-16):** `methodology.html`에 여섯 정책 축, 임계값, 말과 표결 산식,
+  공약·예측 불변 규칙, rules·Claude 버전, 검수 통계, 재현 명령을 게시했다. 주제
+  레코드에도 모델과 `topic_prompt_version`을 추가해 실행 버전을 누락하지 않는다.
 - T8.4 균형 감사 스크립트 `audit-balance`: 정당별 발언 수집 건수, 화자 매칭
   보류율, 주제·입장 보류율, 표본 오류율 입력란을 출력하는 리포트를 만든다.
   분기 1회 실행해 결과를 방법론 페이지에 게시한다.
+  **완료(2026-08-16):** 결정적 JSON 감사 리포트와 CLI를 추가하고 배포 때 현재
+  자료로 갱신한다. 실데이터 감사에서는 5,140건 중 화자 보류 552건(10.7%), 주제
+  보류 0건, 입장 보류 2/23건(8.7%)이었다. 2026-08-16에 원문 대조한 공개 입장
+  21건의 방향 오류는 0건이며 이 표본 범위와 날짜를 함께 게시한다.
 - 완료 기준: 정정 1건의 접수 → 처리 → 공개 기록 흐름이 실제로 동작하고, 방법론
   페이지만 읽고 제3자가 지표 계산을 재현할 수 있다.
+  **충족(2026-08-16):** 가상 데이터 통합 테스트에서 정정 한 건을 접수·반영·공개하고
+  판정 후 변경 거부까지 확인했다. 실서비스에는 실제 요청이 없으므로 가짜 정정 이력을
+  만들지 않았다. 5,140건 실데이터 사이트에서 방법론·감사·정정 창구를 렌더링했고
+  전체 테스트 88건이 통과했다.
 
 ---
 

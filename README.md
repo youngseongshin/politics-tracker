@@ -5,10 +5,11 @@
 국내 주요 정치인·관료·국회의원의 발언을 추적해 보여주는 공개 사이트 프로젝트입니다.
 전체 설계는 [docs/design.md](docs/design.md)를 보세요.
 
-현재 상태: **Phase 2 완료 + Phase 3 진행 중**. 국회 회의록 파싱 → 발언 추출 →
-화자 매칭 → 주제·정책 입장 분류 → 인간 검수 큐 → 본회의 표결 수집 → 말과 표결
-일치 기록 → 정적 사이트까지의 전체 루프가 동작합니다. 기본 경로는 LLM 없이
-돌아가고, 주제·입장·의안 후보 분류에 Claude 백엔드를 선택할 수 있습니다.
+현재 상태: **Phase 3 완료**. 국회 회의록 파싱 → 발언 추출 → 화자 매칭 →
+주제·정책 입장 분류 → 인간 검수 큐 → 본회의 표결 → 말과 표결 기록 → 공약 →
+예측 판정 → 외부 팩트체크 → 정정 공개 기록 → 방법론·균형 감사까지 전체 루프가
+동작합니다. 기본 경로는 LLM 없이 돌아가고, 주제·입장·의안·예측 후보 분류에
+Claude 백엔드를 선택할 수 있습니다.
 
 ## 빠른 시작 (네트워크·API 키 불필요)
 
@@ -32,7 +33,7 @@ politics-tracker quickstart --out ./quickstart_out
 2. 검증된 기본 서비스 ID와 필드는 [docs/api-notes.md](docs/api-notes.md)에서 확인
 
 ```bash
-# 0. 연결·서비스ID·필드매핑 검증 (가장 먼저 실행 — 아래 "검증" 절 참고)
+# 0. 연결·서비스ID·필드매핑 검증 (가장 먼저 실행, 아래 "검증" 절 참고)
 politics-tracker verify-api --era 22
 
 # 1. 의원 명부 수집 (22대)
@@ -55,7 +56,7 @@ politics-tracker parse-minutes ./minutes/2026-07-15-plenary.txt \
 # 2-c. 최근 본회의 표결 20개 의안 수집. 특정 의안은 --bill-id로 재현
 politics-tracker fetch-votes --era 22 --limit 20
 
-# 3. 주제 분류 — 기본은 키워드 규칙(오프라인·결정적)
+# 3. 주제 분류: 기본은 키워드 규칙(오프라인·결정적)
 politics-tracker classify-topics
 # LLM 백엔드 (pip install -e ".[llm]" + ANTHROPIC_API_KEY 필요, 저신뢰는 보류 처리)
 politics-tracker classify-topics --backend claude
@@ -85,6 +86,12 @@ politics-tracker review list --kind prediction
 # politics-tracker prediction resolve pred_... --status correct \
 #   --evidence "https://공식-통계.example/source" --note "판정 근거"
 politics-tracker prediction import data/predictions
+
+# 4-e. 외부 팩트체크는 data/factchecks.yaml에 수동 연결
+# 정정 기록과 균형 감사 자료를 적재·생성
+politics-tracker correction import data/corrections
+politics-tracker audit-balance --sample-size 21 --sample-errors 0 \
+  --sample-checked-at 2026-08-16 --sample-note "대조 범위"
 
 # 5. 정적 사이트 생성
 politics-tracker build-site --out ./site_out
@@ -139,21 +146,24 @@ politics_tracker/
 ├── storage.py             SQLite 운영 저장소 + JSONL 마이그레이션·교환 포맷
 ├── matching.py            화자→인물 매칭 (동명이인은 확정하지 않고 보류)
 ├── sources/
-│   ├── minutes_parser.py  회의록 발언자 마커(◯) 규칙 파싱 — Phase 0의 핵심
+│   ├── minutes_parser.py  회의록 발언자 마커(◯) 규칙 파싱 · Phase 0의 핵심
 │   ├── minutes_catalog.py 회의록 목록 조회·구조화 HTML 파싱 (PDF/텍스트 폴백)
 │   └── assembly_api.py    열린국회정보 Open API 클라이언트
 ├── enrich/
-│   └── topics.py          주제 분류 — rules(키워드) / claude(구조화 출력, 저신뢰 보류)
+│   └── topics.py          주제 분류 · rules(키워드) / claude(구조화 출력, 저신뢰 보류)
 ├── pledges.py             공식 원문 대조 공약 YAML 로더
 ├── prediction_records.py  사람 확정 예측의 배포용 YAML 로더
 ├── enrich/predictions.py  예측 후보 rules/Claude 추출과 원문 인용 검증
+├── factchecks.py          외부 팩트체크 수동 연결
+├── corrections.py        정정 접수·처리 공개 기록 로더
+├── audit.py              정당별 수집량과 보류·검수 균형 감사
 ├── site/                  Jinja2 정적 사이트 빌더 (렌더 레이어는 추후 Next.js로 교체 가능)
 └── samples/               가상 샘플 데이터 (quickstart용)
 schemas/                   person / utterance JSON Schema
 docs/design.md             전체 설계안 (데이터 소스, 평가 방법론, 법적 검토, 로드맵)
 ```
 
-설계 원칙 요약 — 자세한 근거는 design.md:
+설계 원칙 요약. 자세한 근거는 design.md:
 
 1. 모든 발언에 원문 링크. 출처 없는 발언은 코드 레벨에서 거부된다.
 2. 평가는 기계적으로 재현 가능한 지표로만. 종합 점수·랭킹은 만들지 않는다.
@@ -173,7 +183,8 @@ pytest
   주제별 페이지, 인물·주제 필터, 발언 퍼머링크
 - **Phase 2 (완료)**: 인간 검수 큐, 입장 추출·변화 감지, 표결 수집,
   근거를 펼쳐 보는 말–표 일치 기록
-- **Phase 3 (진행 중)**: 공약 추적, 예측 채점, 팩트체크 연계, 정정 채널
+- **Phase 3 (완료)**: 공약 추적, 예측 채점, 외부 팩트체크, 정정 채널,
+  공개 방법론과 균형 감사
 - Phase 4: 공개 API, 비교 페이지 선거 모드
 
 단계별 성공 기준은 [docs/design.md 12장](docs/design.md#12-로드맵),

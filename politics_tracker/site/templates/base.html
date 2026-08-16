@@ -120,6 +120,12 @@
   .prediction-item { padding: 1.1rem 0; border-top: 1px solid var(--line); }
   .prediction-item h4 { font-size: 1rem; margin: 0.35rem 0; }
   .prediction-status { color: var(--sub); margin-bottom: 0.3rem; }
+  .record-note { background: var(--tint); border-radius: 8px; padding: 0.65rem 0.8rem;
+                 margin: 0.65rem 0; color: var(--sub); font-size: 0.92rem; }
+  .record-note p { margin: 0.2rem 0; }
+  .correction-record { padding: 1.15rem 0 1.35rem; border-top: 1px solid var(--line); }
+  .correction-record h2 { margin-top: 0.25rem; }
+  .correction-meta { color: var(--sub); }
 
   /* 발언 타임라인: 날짜 아래 발언을 여백과 구분선으로 나눈다 */
   .day { margin: 2.4rem 0 0; padding-top: 1.1rem; border-top: 1px solid var(--line-strong);
@@ -158,6 +164,9 @@
   @media (max-width: 480px) {
     body { font-size: 15px; }
     h1 { font-size: 1.45rem; }
+    header.site .shell { display: block; }
+    header.site nav { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; margin-top: 0.55rem; }
+    header.site nav a { margin-left: 0; }
     .change-pair { grid-template-columns: 1fr; }
     .status-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
@@ -167,7 +176,7 @@
 <header class="site">
   <div class="shell">
     <a class="brand" href="{{ root }}index.html">발언록</a>
-    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}index.html#topics">주제</a><a href="{{ root }}search.html">발언 검색</a><a href="{{ root }}about.html">소개</a></nav>
+    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}index.html#topics">주제</a><a href="{{ root }}search.html">검색</a><a href="{{ root }}methodology.html">방법론</a><a href="{{ root }}corrections.html">정정</a><a href="{{ root }}about.html">소개</a></nav>
   </div>
 </header>
 <main>
@@ -178,7 +187,7 @@
 <footer class="site">
   <div class="shell">
     <p>발언은 공개된 국회 회의록에서 옮겨 실었으며, 모든 발언에 원문 출처가 표시됩니다.</p>
-    <p>잘못 옮겨진 내용은 정정 요청을 받아 바로잡습니다. <span class="num">{{ generated_at }}</span> 갱신.</p>
+    <p>잘못 옮겨진 내용은 <a href="{{ root }}corrections.html">정정 요청과 공개 기록</a>으로 바로잡습니다. <span class="num">{{ generated_at }}</span> 갱신.</p>
   </div>
 </footer>
 </body>

@@ -75,6 +75,8 @@ TOPICS: dict[str, dict[str, Any]] = {
 TOPIC_LABELS = {key: value["label"] for key, value in TOPICS.items()}
 
 MAX_TOPICS_PER_UTTERANCE = 3
+RULES_PROMPT_VERSION = "topic_rules_v1"
+CLAUDE_PROMPT_VERSION = "topic_v1"
 
 
 # -- rules backend ------------------------------------------------------
@@ -95,6 +97,8 @@ def classify_rules(utterances: list[Utterance]) -> dict[str, int]:
         hits.sort(reverse=True)
         utterance.topics = [key for _, key in hits[:MAX_TOPICS_PER_UTTERANCE]]
         utterance.topic_source = "rules"
+        utterance.topic_model = "deterministic"
+        utterance.topic_prompt_version = RULES_PROMPT_VERSION
         if utterance.topics:
             classified += 1
     return {"total": len(utterances), "with_topics": classified}
@@ -158,6 +162,7 @@ def classify_claude(
     model: str = DEFAULT_LLM_MODEL,
     batch_size: int = DEFAULT_BATCH_SIZE,
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    prompt_version: str = CLAUDE_PROMPT_VERSION,
     client: Any = None,
 ) -> dict[str, int]:
     """Claude 구조화 출력으로 주제를 붙인다.
@@ -203,11 +208,14 @@ def classify_claude(
             kwargs["fallbacks"] = "default"
 
         response = client.beta.messages.create(**kwargs)
+        response_model = getattr(response, "model", model)
 
         if response.stop_reason == "refusal":
             for u in batch:
                 u.topics = []
                 u.topic_source = "held:refusal"
+                u.topic_model = response_model
+                u.topic_prompt_version = prompt_version
             stats["held_refusal"] += len(batch)
             continue
 
@@ -219,10 +227,14 @@ def classify_claude(
             if result["confidence"] < confidence_threshold:
                 utterance.topics = []
                 utterance.topic_source = "held:low_confidence"
+                utterance.topic_model = response_model
+                utterance.topic_prompt_version = prompt_version
                 stats["held_low_confidence"] += 1
             else:
                 utterance.topics = result["topics"][:MAX_TOPICS_PER_UTTERANCE]
-                utterance.topic_source = f"llm:{response.model}"
+                utterance.topic_source = f"llm:{response_model}"
+                utterance.topic_model = response_model
+                utterance.topic_prompt_version = prompt_version
                 if utterance.topics:
                     stats["with_topics"] += 1
 

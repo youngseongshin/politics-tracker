@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/correction.schema.json",
+  "title": "Correction",
+  "description": "공개 정정 요청의 접수와 한 번만 확정할 수 있는 처리 결과.",
+  "type": "object",
+  "required": [
+    "correction_id", "target_kind", "target_id", "requested_at",
+    "request_summary", "channel", "channel_ref", "resolution", "resolved_at",
+    "public_note"
+  ],
+  "properties": {
+    "correction_id": { "type": "string", "pattern": "^corr_" },
+    "target_kind": {
+      "type": "string",
+      "enum": ["utterance", "stance", "pledge", "prediction"]
+    },
+    "target_id": { "type": "string", "minLength": 1 },
+    "requested_at": { "type": "string", "format": "date-time" },
+    "request_summary": { "type": "string", "minLength": 1 },
+    "channel": { "const": "github_issue" },
+    "channel_ref": { "type": "string", "minLength": 1 },
+    "resolution": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "enum": ["반영", "기각", "부분 반영"] }
+      ]
+    },
+    "resolved_at": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "format": "date-time" }
+      ]
+    },
+    "public_note": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1 }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "resolution": { "type": "null" } } },
+      "then": {
+        "properties": {
+          "resolved_at": { "type": "null" },
+          "public_note": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "resolved_at": { "type": "string", "format": "date-time" },
+          "public_note": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 from dataclasses import dataclass, field, asdict
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 
@@ -56,6 +56,8 @@ class Utterance:
     person_id: str | None = None  # 화자 매칭 결과 (미확정이면 None)
     topics: list[str] = field(default_factory=list)  # 주제 키 (enrich.topics.TOPICS)
     topic_source: str | None = None  # "rules" | "llm:<model>" | "held:<사유>" — 분류 방식 공개
+    topic_model: str | None = None
+    topic_prompt_version: str | None = None
     human_reviewed: bool = False
 
     def __post_init__(self) -> None:
@@ -79,6 +81,8 @@ class Utterance:
             person_id=d.get("person_id"),
             topics=list(d.get("topics") or []),
             topic_source=d.get("topic_source"),
+            topic_model=d.get("topic_model"),
+            topic_prompt_version=d.get("topic_prompt_version"),
             human_reviewed=bool(d.get("human_reviewed", False)),
         )
 
@@ -559,6 +563,149 @@ def prediction_candidate_id_for(
 ) -> str:
     canonical = f"{utterance_id}\0{claim.strip()}\0{prompt_version}".encode("utf-8")
     return "predcand_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
+@dataclass
+class FactCheckLink:
+    utterance_id: str
+    organization: str
+    verdict_quote: str
+    url: str
+    checked_at: str
+
+    def __post_init__(self) -> None:
+        if not all(
+            (
+                self.utterance_id,
+                self.organization.strip(),
+                self.verdict_quote.strip(),
+                self.url,
+            )
+        ):
+            raise ValueError("FactCheckLink requires utterance, organization, quote, and URL")
+        try:
+            date.fromisoformat(self.checked_at)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("FactCheckLink.checked_at must be an ISO date") from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FactCheckLink":
+        return cls(
+            utterance_id=data["utterance_id"],
+            organization=data["organization"],
+            verdict_quote=data["verdict_quote"],
+            url=data["url"],
+            checked_at=data["checked_at"],
+        )
+
+
+CORRECTION_TARGET_KINDS = {"utterance", "stance", "pledge", "prediction"}
+CORRECTION_RESOLUTIONS = {"반영", "기각", "부분 반영"}
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("ISO datetime requires a timezone")
+    return parsed
+
+
+@dataclass
+class Correction:
+    correction_id: str
+    target_kind: str
+    target_id: str
+    requested_at: str
+    request_summary: str
+    channel: str
+    channel_ref: str
+    resolution: str | None
+    resolved_at: str | None
+    public_note: str | None
+
+    def __post_init__(self) -> None:
+        if not self.correction_id.startswith("corr_"):
+            raise ValueError("Correction.correction_id must start with corr_")
+        if self.target_kind not in CORRECTION_TARGET_KINDS:
+            raise ValueError(f"Invalid correction target kind: {self.target_kind}")
+        if not all((self.target_id, self.request_summary.strip(), self.channel_ref.strip())):
+            raise ValueError("Correction requires target, request summary, and channel reference")
+        if self.channel != "github_issue":
+            raise ValueError("Correction.channel must be github_issue")
+        try:
+            requested_at = _parse_iso_datetime(self.requested_at)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Correction.requested_at must be an ISO datetime") from exc
+        if self.resolution is None:
+            if self.resolved_at is not None or self.public_note is not None:
+                raise ValueError("Pending correction cannot have resolution details")
+            return
+        if self.resolution not in CORRECTION_RESOLUTIONS:
+            raise ValueError(f"Invalid correction resolution: {self.resolution}")
+        if not self.resolved_at or not (self.public_note or "").strip():
+            raise ValueError("Resolved correction requires resolved_at and public_note")
+        try:
+            resolved_at = _parse_iso_datetime(self.resolved_at)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Correction.resolved_at must be an ISO datetime") from exc
+        if resolved_at < requested_at:
+            raise ValueError("Correction cannot be resolved before it is requested")
+
+    @property
+    def status_label(self) -> str:
+        return self.resolution or "처리 중"
+
+    def with_resolution(
+        self,
+        *,
+        resolution: str,
+        resolved_at: str,
+        public_note: str,
+    ) -> "Correction":
+        if self.resolution is not None:
+            raise ValueError("Resolved correction is immutable")
+        return Correction(
+            correction_id=self.correction_id,
+            target_kind=self.target_kind,
+            target_id=self.target_id,
+            requested_at=self.requested_at,
+            request_summary=self.request_summary,
+            channel=self.channel,
+            channel_ref=self.channel_ref,
+            resolution=resolution,
+            resolved_at=resolved_at,
+            public_note=public_note,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Correction":
+        return cls(
+            correction_id=data["correction_id"],
+            target_kind=data["target_kind"],
+            target_id=data["target_id"],
+            requested_at=data["requested_at"],
+            request_summary=data["request_summary"],
+            channel=data["channel"],
+            channel_ref=data["channel_ref"],
+            resolution=data["resolution"],
+            resolved_at=data["resolved_at"],
+            public_note=data["public_note"],
+        )
+
+
+def correction_id_for(
+    target_kind: str, target_id: str, channel_ref: str, requested_at: str
+) -> str:
+    canonical = f"{target_kind}\0{target_id}\0{channel_ref}\0{requested_at}".encode(
+        "utf-8"
+    )
+    return "corr_" + hashlib.sha256(canonical).hexdigest()[:16]
 
 
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:

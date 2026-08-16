@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}발언록 · 방법론{% endblock %}
+{% block content %}
+<h1>방법론</h1>
+<p class="lead">발언 수집, 자동 분류, 사람 검수, 지표 계산 방법을 공개합니다. 모든 숫자는 근거 목록으로 이동할 수 있으며 종합 점수, 순위, 등급은 만들지 않습니다.</p>
+
+<h2>자료와 귀속</h2>
+<p>발언과 표결은 열린국회정보와 국회 회의록의 공개 기록에서 수집합니다. 발언에는 원문 URL과 수집 시점 스냅샷을 남깁니다. 화자와 인물의 연결은 국회 인물 코드를 우선하며, 이름만으로 확정할 때는 동명이인이 없어야 합니다. 확실하지 않은 발언은 인물에게 귀속하지 않습니다.</p>
+
+<h2>정책 입장 축</h2>
+<p>값은 −1에서 +1 사이의 정책 방향입니다. 방향은 우열, 호감도, 진영 등급을 뜻하지 않습니다. 근거 구절이 원문에 실제로 있고 신뢰도 기준을 통과한 입장만 표시합니다.</p>
+<div class="table-scroll">
+<table class="evidence-table">
+  <thead><tr><th>축</th><th>−1 방향</th><th>+1 방향</th><th>표결 방향</th></tr></thead>
+  <tbody>
+  {% for axis in axes %}
+  <tr>
+    <td><code>{{ axis.key }}</code><br>{{ axis.label }}</td>
+    <td>{{ axis.negative_pole }}</td>
+    <td>{{ axis.positive_pole }}</td>
+    <td>−값 {{ axis.bill_direction.negative }} · +값 {{ axis.bill_direction.positive }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>자동 처리 기준</h2>
+<table>
+  <thead><tr><th>단계</th><th>공개 또는 보류 기준</th></tr></thead>
+  <tbody>
+    <tr><td>주제 분류</td><td>Claude 신뢰도 0.6 미만은 보류합니다. 기본 rules 경로는 공개 키워드 규칙으로 결정합니다.</td></tr>
+    <tr><td>입장 추출</td><td>신뢰도 0.7 미만, 상반된 방향 문구, 원문에 없는 근거 인용은 보류합니다.</td></tr>
+    <tr><td>입장 변화</td><td>같은 인물·축의 시간순 인접 값 차이가 0.8 이상인 후보를 전건 사람이 검수합니다.</td></tr>
+    <tr><td>발언·의안 연결</td><td>정확한 의안명 또는 번호 일치는 규칙으로 연결합니다. LLM 후보는 전건 사람이 검수합니다.</td></tr>
+    <tr><td>예측 후보</td><td>미래 시한과 확인 가능한 결과가 모두 있는 후보만 만들고 전건 사람이 등록 여부를 결정합니다.</td></tr>
+  </tbody>
+</table>
+
+<h2>말과 표결 기록 산식</h2>
+<p>판정 가능한 한 쌍은 다음 조건을 모두 만족해야 합니다. 발언 입장의 절댓값이 0.3 이상이고, 사람이 검수했거나 자동 추출 신뢰도가 0.85 이상이며, 발언일이 표결일보다 앞서야 합니다. 같은 날은 시각을 추정하지 않고 제외합니다. 축 설정의 양·음 방향을 기대 표결로 바꾼 뒤 실제 표결과 같은지 비교합니다.</p>
+<p><code>일치율 = 일치한 근거 쌍 수 ÷ 판정 가능한 근거 쌍 수</code>입니다. 사이트에는 비율과 함께 분모에 들어간 근거 쌍 전건을 표시합니다.</p>
+
+<h2>공약과 예측 판정</h2>
+<p>공약의 판정 기준은 등록 시점에 고정하고 상태 변경을 근거 URL과 함께 이력으로 추가합니다. 예측은 사람이 주장, 마감일, 판정 기준을 먼저 확정합니다. 마감 전에는 판정할 수 없고 판정 뒤 결과를 바꿀 수 없습니다. 잘못된 판정은 기존 기록 수정이 아니라 새 정정 기록으로 설명합니다.</p>
+
+<h2>추출기와 프롬프트 버전</h2>
+<div class="table-scroll">
+<table class="evidence-table">
+  <thead><tr><th>단계</th><th>백엔드</th><th>모델</th><th>규칙·프롬프트 버전</th></tr></thead>
+  <tbody>
+  {% for row in extractor_versions %}
+  <tr><td>{{ row.stage }}</td><td>{{ row.backend }}</td><td>{{ row.model }}</td><td><code>{{ row.prompt_version }}</code></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>균형 감사</h2>
+<p><span class="num">{{ audit.as_of }}</span> 기준 현재 저장 자료의 수집량과 보류율입니다. 보류율은 오류가 아니라 자동 공개하지 않은 비율입니다.</p>
+<table>
+  <tbody>
+    <tr><th>인물</th><td class="num">{{ audit.corpus.people }}명</td></tr>
+    <tr><th>전체 발언</th><td class="num">{{ audit.corpus.utterances }}건</td></tr>
+    <tr><th>인물 귀속 발언</th><td class="num">{{ audit.corpus.attributed }}건</td></tr>
+    <tr><th>화자 매칭 보류</th><td class="num">{{ audit.corpus.unmatched }}건 · {% if audit.corpus.matching_hold_rate is none %}해당 없음{% else %}{{ "%.1f" | format(audit.corpus.matching_hold_rate * 100) }}%{% endif %}</td></tr>
+    <tr><th>주제 보류</th><td class="num">{{ audit.topics.held }}건 · {% if audit.topics.hold_rate is none %}해당 없음{% else %}{{ "%.1f" | format(audit.topics.hold_rate * 100) }}%{% endif %}</td></tr>
+    <tr><th>입장 보류</th><td class="num">{{ audit.stances.held }} / {{ audit.stances.records }}건 · {% if audit.stances.hold_rate is none %}해당 없음{% else %}{{ "%.1f" | format(audit.stances.hold_rate * 100) }}%{% endif %}</td></tr>
+    <tr><th>표본 오류율</th><td>{% if audit.sample_error_audit.error_rate is none %}아직 입력된 사람 대조 표본 없음{% else %}<span class="num">{{ audit.sample_error_audit.errors }} / {{ audit.sample_error_audit.sample_size }}건 · {{ "%.1f" | format(audit.sample_error_audit.error_rate * 100) }}%{% if audit.sample_error_audit.checked_at %} · {{ audit.sample_error_audit.checked_at }} 대조{% endif %}</span>{% if audit.sample_error_audit.note %}<br>{{ audit.sample_error_audit.note }}{% endif %}{% endif %}</td></tr>
+  </tbody>
+</table>
+
+<h3>정당별 수집량</h3>
+<p class="muted">정당별 발언 수는 수집 편향을 점검하기 위한 운영 지표이며 정치 활동의 양이나 질에 대한 평가가 아닙니다.</p>
+<table>
+  <thead><tr><th>정당</th><th class="num">인물</th><th class="num">귀속 발언</th></tr></thead>
+  <tbody>
+  {% for row in audit.parties %}<tr><td>{{ row.party }}</td><td class="num">{{ row.people }}</td><td class="num">{{ row.utterances }}</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+<h3>검수 큐</h3>
+{% if audit.reviews %}
+<table>
+  <thead><tr><th>종류</th><th class="num">대기</th><th class="num">승인</th><th class="num">기각</th><th class="num">승인율</th></tr></thead>
+  <tbody>
+  {% for row in audit.reviews %}
+  <tr><td>{{ row.kind }}</td><td class="num">{{ row.pending }}</td><td class="num">{{ row.approved }}</td><td class="num">{{ row.rejected }}</td><td class="num">{% if row.approval_rate is none %}해당 없음{% else %}{{ "%.1f" | format(row.approval_rate * 100) }}%{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="notice">현재 저장 자료에는 검수 큐 기록이 없습니다.</p>
+{% endif %}
+
+<h2>재현 방법</h2>
+<p>공개 저장소에서 같은 원자료와 설정을 사용해 <code>classify-topics</code>, <code>extract-stances</code>, <code>link-bills</code>, <code>compute-consistency</code>, <code>audit-balance</code>, <code>build-site</code>를 순서대로 실행하면 같은 판정 대상과 집계를 얻을 수 있습니다. 외부 API 원자료가 바뀐 경우에는 수집 시점 스냅샷을 기준으로 대조합니다.</p>
+{% endblock %}

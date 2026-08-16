@@ -1,5 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ person.name }} · 발언록{% endblock %}
+{% macro correction_notes(target_id) %}
+{% for correction in corrections_by_target.get(target_id, []) %}
+<div class="record-note correction-note">
+  <p><strong>정정 {{ correction.status_label }}</strong> · <a href="../corrections.html#{{ correction.correction_id }}">공개 기록</a></p>
+  <p>{{ correction.public_note or correction.request_summary }}</p>
+</div>
+{% endfor %}
+{% endmacro %}
+{% macro factcheck_notes(utterance_id) %}
+{% for factcheck in factchecks_by_utterance.get(utterance_id, []) %}
+<div class="record-note factcheck-note">
+  <p>팩트체크: <a href="{{ factcheck.url }}" rel="noopener">{{ factcheck.organization }} “{{ factcheck.verdict_quote }}”</a> · <span class="num">{{ factcheck.checked_at }}</span></p>
+</div>
+{% endfor %}
+{% endmacro %}
 {% block content %}
 <h1>{{ person.name }}</h1>
 <p class="lead">
@@ -30,6 +45,7 @@
       </div>
       <p class="stance-rationale">근거 구절: “{{ item.stance.rationale_quote }}”</p>
       <p class="stance-method">신뢰도 <span class="num">{{ "%.2f" | format(item.stance.confidence) }}</span> · {{ item.stance.extractor.backend }} · {{ item.stance.extractor.prompt_version }}{% if item.stance.human_reviewed %} · 사람 검수 완료{% endif %}</p>
+      {{ correction_notes(item.stance.stance_id) }}
     </div>
     {% endfor %}
   </div>
@@ -100,6 +116,7 @@
     <article class="pledge-item" id="{{ pledge.pledge_id }}">
       <h3>{{ pledge.text }}</h3>
       <p><strong>현재 상태: {{ pledge.current_status }}</strong> · <a href="{{ pledge.source.url }}" rel="noopener">{{ pledge.source.title }}</a></p>
+      {{ correction_notes(pledge.pledge_id) }}
       <p class="pledge-criteria"><strong>판정 기준:</strong> {{ pledge.criteria }}</p>
       <ol class="status-history">
       {% for history in pledge.status_history | reverse %}
@@ -132,6 +149,7 @@
     <h4>{{ row.prediction.claim }}</h4>
     <p><strong>판정 기준:</strong> {{ row.prediction.criteria }}</p>
     <a href="#{{ row.utterance.utterance_id }}">근거 발언</a>
+    {{ correction_notes(row.prediction.prediction_id) }}
   </article>
   {% endfor %}
   {% endif %}
@@ -148,6 +166,7 @@
       <li><a href="{{ evidence.url }}" rel="noopener">판정 근거</a>: {{ evidence.note }}</li>
     {% endfor %}
     </ul>
+    {{ correction_notes(row.prediction.prediction_id) }}
   </article>
   {% endfor %}
   {% endif %}
@@ -168,6 +187,8 @@
     <div class="who">{{ u.speaker_name }}{% if u.speaker_role %}<span class="role">{{ u.speaker_role }}</span>{% endif %}
       {%- for t in u.topics %}<button type="button" class="chip" data-topic="{{ t }}" data-topic-label="{{ topic_labels.get(t, t) }}" aria-pressed="false">{{ topic_labels.get(t, t) }}</button>{% endfor %}</div>
     <p class="speech">{{ u.text }}</p>
+    {{ factcheck_notes(u.utterance_id) }}
+    {{ correction_notes(u.utterance_id) }}
     <div class="srcline">출처:
       <a href="{{ u.source.url }}" rel="noopener">{{ u.source.title or "회의록 원문" }}</a>{% if u.source.retrieved_at %} · <span class="num">{{ u.source.retrieved_at[:10] }}</span> 수집{% endif %}
     </div>

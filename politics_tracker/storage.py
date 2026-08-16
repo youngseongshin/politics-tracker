@@ -14,6 +14,7 @@ from pathlib import Path
 from .models import (
     Bill,
     ConsistencyPair,
+    Correction,
     Person,
     Pledge,
     Prediction,
@@ -41,6 +42,7 @@ class Store:
         self.consistency_pairs_path = self.root / "consistency_pairs.jsonl"
         self.pledges_path = self.root / "pledges.jsonl"
         self.predictions_path = self.root / "predictions.jsonl"
+        self.corrections_path = self.root / "corrections.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -179,6 +181,46 @@ class Store:
         self.save_predictions(list(existing.values()))
         return added
 
+    # -- corrections ----------------------------------------------------
+    def save_corrections(self, corrections: list[Correction]) -> None:
+        existing = {
+            correction.correction_id: correction for correction in self.load_corrections()
+        }
+        incoming = {
+            correction.correction_id: correction for correction in corrections
+        }
+        if len(incoming) != len(corrections):
+            raise ValueError("Duplicate correction_id in correction collection")
+        missing = sorted(set(existing) - set(incoming))
+        if missing:
+            raise ValueError(f"Correction records cannot be removed: {', '.join(missing)}")
+        for correction_id, old in existing.items():
+            _validate_correction_update(old, incoming[correction_id])
+        _write_jsonl(
+            self.corrections_path,
+            [correction.to_dict() for correction in corrections],
+        )
+
+    def load_corrections(self) -> list[Correction]:
+        return [
+            Correction.from_dict(data) for data in _read_jsonl(self.corrections_path)
+        ]
+
+    def upsert_corrections(self, corrections: list[Correction]) -> int:
+        if len({item.correction_id for item in corrections}) != len(corrections):
+            raise ValueError("Duplicate correction_id in correction collection")
+        existing = {
+            correction.correction_id: correction for correction in self.load_corrections()
+        }
+        added = sum(item.correction_id not in existing for item in corrections)
+        for correction in corrections:
+            old = existing.get(correction.correction_id)
+            if old:
+                _validate_correction_update(old, correction)
+            existing[correction.correction_id] = correction
+        self.save_corrections(list(existing.values()))
+        return added
+
 
 _SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS people (
@@ -299,6 +341,22 @@ CREATE INDEX IF NOT EXISTS idx_predictions_person ON predictions(person_id);
 CREATE INDEX IF NOT EXISTS idx_predictions_status_deadline
     ON predictions(status, deadline);
 
+CREATE TABLE IF NOT EXISTS corrections (
+    correction_id TEXT PRIMARY KEY,
+    target_kind TEXT NOT NULL
+        CHECK (target_kind IN ('utterance', 'stance', 'pledge', 'prediction')),
+    target_id TEXT NOT NULL,
+    requested_at TEXT NOT NULL,
+    resolution TEXT CHECK (resolution IN ('반영', '기각', '부분 반영')),
+    list_order INTEGER NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_corrections_target
+    ON corrections(target_kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_corrections_requested
+    ON corrections(requested_at);
+
 CREATE TABLE IF NOT EXISTS reviews (
     review_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -355,6 +413,31 @@ def _validate_prediction_update(old: Prediction, new: Prediction) -> None:
         raise ValueError("Resolved prediction is immutable")
     if old.status != "open" and new.status == "open":
         raise ValueError("Resolved prediction cannot be reopened")
+
+
+def _validate_correction_update(old: Correction, new: Correction) -> None:
+    immutable_old = (
+        old.correction_id,
+        old.target_kind,
+        old.target_id,
+        old.requested_at,
+        old.request_summary,
+        old.channel,
+        old.channel_ref,
+    )
+    immutable_new = (
+        new.correction_id,
+        new.target_kind,
+        new.target_id,
+        new.requested_at,
+        new.request_summary,
+        new.channel,
+        new.channel_ref,
+    )
+    if immutable_old != immutable_new:
+        raise ValueError("Correction request fields are immutable")
+    if old.resolution is not None and old != new:
+        raise ValueError("Resolved correction is immutable")
 
 
 class SqliteStore:
@@ -1190,6 +1273,138 @@ class SqliteStore:
                         self._prediction_values(prediction, list_order),
                     )
                 after = conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+            return after - before
+        finally:
+            conn.close()
+
+    # -- corrections ----------------------------------------------------
+    @staticmethod
+    def _correction_values(correction: Correction, list_order: int) -> tuple:
+        return (
+            correction.correction_id,
+            correction.target_kind,
+            correction.target_id,
+            correction.requested_at,
+            correction.resolution,
+            list_order,
+            _json(correction.to_dict()),
+        )
+
+    def save_corrections(self, corrections: list[Correction]) -> None:
+        existing = {
+            correction.correction_id: correction for correction in self.load_corrections()
+        }
+        incoming = {
+            correction.correction_id: correction for correction in corrections
+        }
+        if len(incoming) != len(corrections):
+            raise ValueError("Duplicate correction_id in correction collection")
+        missing = sorted(set(existing) - set(incoming))
+        if missing:
+            raise ValueError(f"Correction records cannot be removed: {', '.join(missing)}")
+        for correction_id, old in existing.items():
+            _validate_correction_update(old, incoming[correction_id])
+
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM corrections")
+                conn.executemany(
+                    """
+                    INSERT INTO corrections(
+                        correction_id, target_kind, target_id, requested_at,
+                        resolution, list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        self._correction_values(correction, index)
+                        for index, correction in enumerate(corrections)
+                    ],
+                )
+        finally:
+            conn.close()
+
+    def load_corrections(
+        self,
+        *,
+        target_kind: str | None = None,
+        target_id: str | None = None,
+    ) -> list[Correction]:
+        where: list[str] = []
+        values: list[str] = []
+        if target_kind:
+            where.append("target_kind = ?")
+            values.append(target_kind)
+        if target_id:
+            where.append("target_id = ?")
+            values.append(target_id)
+        sql = "SELECT payload_json FROM corrections"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY requested_at, list_order, correction_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [
+                Correction.from_dict(json.loads(row["payload_json"])) for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def get_correction(self, correction_id: str) -> Correction | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT payload_json FROM corrections WHERE correction_id = ?",
+                (correction_id,),
+            ).fetchone()
+            return Correction.from_dict(json.loads(row["payload_json"])) if row else None
+        finally:
+            conn.close()
+
+    def upsert_corrections(self, corrections: list[Correction]) -> int:
+        if len({item.correction_id for item in corrections}) != len(corrections):
+            raise ValueError("Duplicate correction_id in correction collection")
+        conn = self._connect()
+        try:
+            existing_rows = conn.execute(
+                "SELECT correction_id, list_order, payload_json FROM corrections"
+            ).fetchall()
+            existing = {
+                row["correction_id"]: (
+                    Correction.from_dict(json.loads(row["payload_json"])),
+                    row["list_order"],
+                )
+                for row in existing_rows
+            }
+            for correction in corrections:
+                old = existing.get(correction.correction_id)
+                if old:
+                    _validate_correction_update(old[0], correction)
+
+            with conn:
+                before = len(existing)
+                next_order = max(
+                    (item[1] for item in existing.values()), default=-1
+                ) + 1
+                for correction in corrections:
+                    old = existing.get(correction.correction_id)
+                    list_order = old[1] if old else next_order
+                    if not old:
+                        next_order += 1
+                    conn.execute(
+                        """
+                        INSERT INTO corrections(
+                            correction_id, target_kind, target_id, requested_at,
+                            resolution, list_order, payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(correction_id) DO UPDATE SET
+                            resolution = excluded.resolution,
+                            payload_json = excluded.payload_json
+                        """,
+                        self._correction_values(correction, list_order),
+                    )
+                after = conn.execute("SELECT COUNT(*) FROM corrections").fetchone()[0]
             return after - before
         finally:
             conn.close()
