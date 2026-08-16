@@ -3,6 +3,7 @@ from argparse import Namespace
 from politics_tracker import cli
 from politics_tracker.sources import assembly_api
 from politics_tracker.sources.assembly_api import (
+    AssemblyOpenAPI,
     DEFAULT_MEMBER_SERVICE_ID,
     DEFAULT_PLENARY_MINUTES_SERVICE_ID,
     normalize_member,
@@ -40,6 +41,18 @@ def test_cli_defaults_use_verified_service_ids():
     assert minutes.service_id is None
     assert minutes.era == "22"
     assert DEFAULT_PLENARY_MINUTES_SERVICE_ID == "nzbyfwhwaoanttzje"
+
+
+def test_assembly_api_retries_transient_get_failures():
+    api = AssemblyOpenAPI(api_key="test-key")
+
+    retries = api._session.get_adapter("https://").max_retries
+    assert retries.total == 3
+    assert retries.connect == 3
+    assert retries.read == 3
+    assert retries.backoff_factor == 1.0
+    assert retries.allowed_methods == frozenset({"GET"})
+    assert {429, 500, 502, 503, 504} <= set(retries.status_forcelist)
 
 
 def test_verify_api_passes_299_current_members_without_fake_era_filter(monkeypatch, capsys):

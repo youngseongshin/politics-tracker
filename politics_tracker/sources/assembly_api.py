@@ -18,6 +18,8 @@ import os
 from typing import Any, Iterator
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from ..models import Person
 
@@ -54,6 +56,19 @@ class AssemblyOpenAPI:
         self.base_url = base_url.rstrip("/") + "/"
         self.timeout = timeout
         self._session = requests.Session()
+        retries = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            status=3,
+            backoff_factor=1.0,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
     def rows(self, service_id: str, page_size: int = 300, **filters: Any) -> Iterator[dict[str, Any]]:
         """서비스의 전체 row를 페이지네이션을 따라가며 순회한다."""
