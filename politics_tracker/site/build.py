@@ -17,7 +17,15 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..enrich.topics import TOPIC_LABELS
 from ..enrich.stances import StanceAxis, select_best_stances
-from ..models import Person, ReviewItem, Stance, Utterance
+from ..models import (
+    Bill,
+    ConsistencyPair,
+    Person,
+    ReviewItem,
+    Stance,
+    Utterance,
+    Vote,
+)
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -235,6 +243,61 @@ def _approved_stance_changes(
     return changes
 
 
+def _consistency_by_person(
+    pairs: list[ConsistencyPair],
+    bills: list[Bill],
+    votes: list[Vote],
+    utterances: list[Utterance],
+    stances: list[Stance],
+    axes: list[StanceAxis],
+) -> dict[str, dict]:
+    bill_by_id = {bill.bill_id: bill for bill in bills}
+    vote_by_id = {vote.vote_id: vote for vote in votes}
+    utterance_by_id = {utterance.utterance_id: utterance for utterance in utterances}
+    stance_by_id = {stance.stance_id: stance for stance in stances}
+    axis_by_key = {axis.key: axis for axis in axes}
+    rows_by_person: dict[str, list[dict]] = defaultdict(list)
+    for pair in pairs:
+        bill = bill_by_id.get(pair.bill_id)
+        vote = vote_by_id.get(pair.vote_id)
+        utterance = utterance_by_id.get(pair.utterance_id)
+        stance = stance_by_id.get(pair.stance_id)
+        axis = axis_by_key.get(pair.axis)
+        if not all((bill, vote, utterance, stance, axis)):
+            continue
+        rows_by_person[pair.person_id].append(
+            {
+                "pair": pair,
+                "bill": bill,
+                "vote": vote,
+                "utterance": utterance,
+                "stance": stance,
+                "axis": axis,
+                "value_label": f"{pair.stance_value:+.1f}",
+                "result_label": "일치" if pair.consistent else "불일치",
+            }
+        )
+
+    result = {}
+    for person_id, rows in rows_by_person.items():
+        rows.sort(
+            key=lambda row: (
+                row["vote"].voted_at,
+                row["bill"].assembly_bill_no,
+                row["pair"].consistency_id,
+            ),
+            reverse=True,
+        )
+        consistent = sum(int(row["pair"].consistent) for row in rows)
+        result[person_id] = {
+            "consistent": consistent,
+            "eligible": len(rows),
+            "percentage": round(consistent / len(rows) * 100, 1),
+            "rows": rows,
+        }
+    return result
+
+
 def build_site(
     people: list[Person],
     utterances: list[Utterance],
@@ -243,6 +306,9 @@ def build_site(
     stances: list[Stance] | None = None,
     stance_axes: list[StanceAxis] | None = None,
     reviews: list[ReviewItem] | None = None,
+    bills: list[Bill] | None = None,
+    votes: list[Vote] | None = None,
+    consistency_pairs: list[ConsistencyPair] | None = None,
 ) -> BuildStats:
     out = Path(out_dir)
     (out / "person").mkdir(parents=True, exist_ok=True)
@@ -251,6 +317,12 @@ def build_site(
     stances = stances or []
     stance_axes = stance_axes or []
     reviews = reviews or []
+    bills = bills or []
+    votes = votes or []
+    consistency_pairs = consistency_pairs or []
+    consistency = _consistency_by_person(
+        consistency_pairs, bills, votes, utterances, stances, stance_axes
+    )
 
     by_person: dict[str, list[Utterance]] = defaultdict(list)
     unmatched = 0
@@ -278,6 +350,7 @@ def build_site(
             stance_changes=_approved_stance_changes(
                 person.person_id, reviews, stances, utterances, stance_axes
             ),
+            consistency=consistency.get(person.person_id),
             generated_at=generated_at,
         )
         (out / "person" / f"{person.person_id}.html").write_text(html, encoding="utf-8")

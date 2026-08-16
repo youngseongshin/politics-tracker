@@ -47,6 +47,9 @@ jobs:
           politics-tracker classify-topics --backend rules
           politics-tracker extract-stances --backend rules
           politics-tracker detect-stance-changes
+          politics-tracker fetch-votes --era 22 --year "$collection_year" --limit 20
+          politics-tracker link-bills --backend rules
+          politics-tracker compute-consistency
 
       - name: Build static site from the real-data store
         run: politics-tracker build-site --out site_out

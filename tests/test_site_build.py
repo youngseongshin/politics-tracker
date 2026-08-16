@@ -3,7 +3,16 @@ import json
 import politics_tracker.site.build as site_build_module
 from politics_tracker.enrich.stances import load_stance_axes
 from politics_tracker.matching import match_utterances
-from politics_tracker.models import Person, ReviewItem, Stance, Utterance, stance_id_for
+from politics_tracker.models import (
+    Bill,
+    ConsistencyPair,
+    Person,
+    ReviewItem,
+    Stance,
+    Utterance,
+    Vote,
+    stance_id_for,
+)
 from politics_tracker.site.build import build_site
 
 
@@ -95,6 +104,34 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
         created_at="2026-08-16T00:00:00Z",
         decided_at="2026-08-16T01:00:00Z",
     )
+    bill = Bill(
+        bill_id="bill_1",
+        assembly_bill_no="2200001",
+        title="주택법 일부개정법률안",
+        proposed_at="2026-07-01",
+        link_url="https://example.invalid/bill/1",
+    )
+    vote = Vote(
+        vote_id="vote_1",
+        bill_id=bill.bill_id,
+        person_id="p1",
+        decision="찬성",
+        voted_at="2026-07-16",
+        source={"kind": "assembly_vote_api", "url": "https://example.invalid/vote/1"},
+    )
+    consistency_pair = ConsistencyPair(
+        consistency_id="cons_1",
+        person_id="p1",
+        bill_id=bill.bill_id,
+        utterance_id="u1",
+        stance_id=after.stance_id,
+        vote_id=vote.vote_id,
+        axis="housing_regulation",
+        stance_value=after.value,
+        expected_decision="찬성",
+        vote_decision=vote.decision,
+        consistent=True,
+    )
     stats = build_site(
         people,
         utterances,
@@ -102,6 +139,9 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
         stances=[before, after],
         stance_axes=load_stance_axes(),
         reviews=[change],
+        bills=[bill],
+        votes=[vote],
+        consistency_pairs=[consistency_pair],
     )
 
     assert stats.people_pages == 2
@@ -130,10 +170,16 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
     assert 'style="left: 65.0%"' in p1
     assert "확인된 입장 변화" in p1
     assert "두 원문과 당시 회의 맥락을 확인했습니다." in p1
+    assert "말과 표결 기록" in p1
+    assert "일치 <span class=\"num\">1</span>건 / 판정 가능" in p1
+    assert "주택법 일부개정법률안" in p1
+    assert "https://example.invalid/bill/1" in p1
+    assert "https://example.invalid/vote/1" in p1
     assert "https://example.invalid/minutes/1" in p1  # 발언마다 원문 링크
 
     p2 = (tmp_path / "person" / "p2.html").read_text(encoding="utf-8")
     assert "아직 수록된 발언이 없습니다" in p2
+    assert "말과 표결 기록" not in p2
     assert (tmp_path / "about.html").exists()
     assert 'topic/housing.html' in index
     housing = (tmp_path / "topic" / "housing.html").read_text(encoding="utf-8")

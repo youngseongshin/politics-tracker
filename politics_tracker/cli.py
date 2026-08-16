@@ -516,6 +516,9 @@ def cmd_build_site(args: argparse.Namespace) -> int:
         stances=store.load_stances(),
         stance_axes=load_stance_axes(args.axes),
         reviews=store.load_reviews(),
+        bills=store.load_bills(),
+        votes=store.load_votes(),
+        consistency_pairs=store.load_consistency_pairs(),
     )
     print(f"인물 페이지 {stats.people_pages}개, 발언 {stats.utterances_rendered}건 렌더링 "
           f"(미귀속 {stats.unmatched_utterances}건) -> {Path(args.out) / 'index.html'}")
