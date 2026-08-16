@@ -268,6 +268,48 @@ def vote_id_for(bill_id: str, person_id: str, voted_at: str) -> str:
     return "vote_" + hashlib.sha256(canonical).hexdigest()[:16]
 
 
+@dataclass
+class UtteranceBillLink:
+    link_id: str
+    utterance_id: str
+    bill_id: str
+    method: str
+    confidence: float
+    extractor: dict[str, str]
+    human_reviewed: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.link_id.startswith("ubl_"):
+            raise ValueError("UtteranceBillLink.link_id must start with ubl_")
+        if self.method not in {"rule:title_match", "llm:candidate"}:
+            raise ValueError(f"Invalid bill link method: {self.method}")
+        if not 0 <= self.confidence <= 1:
+            raise ValueError("UtteranceBillLink.confidence must be between 0 and 1")
+        required = {"backend", "model", "prompt_version"}
+        if not required.issubset(self.extractor):
+            raise ValueError("UtteranceBillLink.extractor is incomplete")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "UtteranceBillLink":
+        return cls(
+            link_id=data["link_id"],
+            utterance_id=data["utterance_id"],
+            bill_id=data["bill_id"],
+            method=data["method"],
+            confidence=float(data["confidence"]),
+            extractor=dict(data["extractor"]),
+            human_reviewed=bool(data.get("human_reviewed", False)),
+        )
+
+
+def bill_link_id_for(utterance_id: str, bill_id: str, method: str) -> str:
+    canonical = f"{utterance_id}\0{bill_id}\0{method}".encode("utf-8")
+    return "ubl_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:
     """회의록(출처)과 날짜, 순서로 결정되는 안정적 ID. 재수집해도 같은 ID가 나온다."""
     h = hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:8]

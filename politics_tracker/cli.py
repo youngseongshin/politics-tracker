@@ -19,7 +19,13 @@ from pathlib import Path
 
 from .enrich.topics import TOPICS, classify_rules
 from .matching import match_utterances
-from .models import Person, ReviewItem, Stance, review_id_for
+from .models import (
+    Person,
+    ReviewItem,
+    Stance,
+    UtteranceBillLink,
+    review_id_for,
+)
 from .site.build import build_site
 from .sources.assembly_api import (
     DEFAULT_COMMITTEE_MINUTES_SERVICE_ID,
@@ -360,6 +366,51 @@ def cmd_detect_stance_changes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_link_bills(args: argparse.Namespace) -> int:
+    from .enrich.bill_links import (
+        extract_bill_links_claude,
+        extract_bill_links_rules,
+    )
+
+    store = SqliteStore(args.db)
+    utterances = store.load_utterances()
+    bills = store.load_bills()
+    if not utterances or not bills:
+        print("발언과 의안이 모두 필요합니다.", file=sys.stderr)
+        return 1
+    if args.backend == "rules":
+        links = extract_bill_links_rules(utterances, bills)
+        stats = {"proposed": len(links)}
+    else:
+        links, stats = extract_bill_links_claude(
+            utterances,
+            bills,
+            model=args.model,
+            prompt_version=args.prompt_version,
+            batch_size=args.batch_size,
+            candidate_limit=args.candidate_limit,
+        )
+    added = store.upsert_bill_links(links)
+    queued = 0
+    if args.backend == "claude":
+        for link in links:
+            payload = link.to_dict()
+            reason = "held:bill_link_requires_review"
+            review = ReviewItem(
+                review_id=review_id_for("bill_link", link.link_id, reason, payload),
+                kind="bill_link",
+                target_id=link.link_id,
+                payload=payload,
+                reason=reason,
+                status="pending",
+                created_at=_now_iso(),
+            )
+            queued += int(store.enqueue_review(review))
+    stats.update({"stored_new": added, "queued_for_review": queued})
+    print(f"발언·의안 연결({args.backend}): {stats}")
+    return 0
+
+
 def cmd_verify_api(args: argparse.Namespace) -> int:
     """실제 API 키로 연결성·서비스 ID·필드 매핑을 점검한다. 로컬에서 실행."""
     from .sources.assembly_api import AssemblyAPIError, AssemblyOpenAPI, normalize_member
@@ -458,6 +509,7 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     stances = source.load_stances()
     bills = source.load_bills()
     votes = source.load_votes()
+    bill_links = source.load_bill_links()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -465,10 +517,11 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     target.save_stances(stances)
     target.save_bills(bills)
     target.save_votes(votes)
+    target.save_bill_links(bill_links)
     print(
         f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
-        f"표결 {len(votes)}건 → {target.db_path}"
+        f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건 → {target.db_path}"
     )
     return 0
 
@@ -481,6 +534,7 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     stances = source.load_stances()
     bills = source.load_bills()
     votes = source.load_votes()
+    bill_links = source.load_bill_links()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -488,10 +542,11 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     target.save_stances(stances)
     target.save_bills(bills)
     target.save_votes(votes)
+    target.save_bill_links(bill_links)
     print(
         f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
-        f"표결 {len(votes)}건 → {target.root}"
+        f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건 → {target.root}"
     )
     return 0
 
@@ -544,7 +599,7 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
     if review.status != "pending":
         print(f"이미 결정된 검수 항목입니다: {review.status}", file=sys.stderr)
         return 1
-    if review.kind not in {"topic", "stance", "stance_change"}:
+    if review.kind not in {"topic", "stance", "stance_change", "bill_link"}:
         print(f"아직 승인 반영을 지원하지 않는 종류입니다: {review.kind}", file=sys.stderr)
         return 1
 
@@ -612,6 +667,44 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
             print(f"입장 승인 값이 유효하지 않습니다: {error}", file=sys.stderr)
             return 1
         store.upsert_stances([approved_stance])
+    elif review.kind == "bill_link":
+        target_link = next(
+            (
+                link
+                for link in store.load_bill_links()
+                if link.link_id == review.target_id
+            ),
+            None,
+        )
+        if target_link is None:
+            print(f"대상 발언·의안 연결을 찾을 수 없습니다: {review.target_id}", file=sys.stderr)
+            return 1
+        utterance_ids = {
+            utterance.utterance_id for utterance in store.load_utterances()
+        }
+        bill_ids = {bill.bill_id for bill in store.load_bills()}
+        if (
+            target_link.utterance_id not in utterance_ids
+            or target_link.bill_id not in bill_ids
+        ):
+            print("발언·의안 연결의 원본 레코드가 없습니다.", file=sys.stderr)
+            return 1
+        payload.update(
+            {
+                "link_id": target_link.link_id,
+                "utterance_id": target_link.utterance_id,
+                "bill_id": target_link.bill_id,
+                "method": target_link.method,
+                "extractor": target_link.extractor,
+                "human_reviewed": True,
+            }
+        )
+        try:
+            approved_link = UtteranceBillLink.from_dict(payload)
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"발언·의안 연결 승인 값이 유효하지 않습니다: {error}", file=sys.stderr)
+            return 1
+        store.upsert_bill_links([approved_link])
     else:
         context_note = str(payload.get("context_note") or args.note or "").strip()
         if not context_note:
@@ -736,6 +829,15 @@ def build_parser() -> argparse.ArgumentParser:
     stance_changes.add_argument("--threshold", type=float, default=0.8)
     stance_changes.add_argument("--db", default=DEFAULT_DB_PATH)
     stance_changes.set_defaults(func=cmd_detect_stance_changes)
+
+    bill_links = sub.add_parser("link-bills", help="발언과 의안을 규칙 또는 LLM 후보로 연결")
+    bill_links.add_argument("--backend", choices=["rules", "claude"], default="rules")
+    bill_links.add_argument("--model", default="claude-opus-5")
+    bill_links.add_argument("--prompt-version", default="bill_link_v1")
+    bill_links.add_argument("--batch-size", type=int, default=10)
+    bill_links.add_argument("--candidate-limit", type=int, default=500)
+    bill_links.add_argument("--db", default=DEFAULT_DB_PATH)
+    bill_links.set_defaults(func=cmd_link_bills)
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")

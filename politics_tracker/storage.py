@@ -11,7 +11,15 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .models import Bill, Person, ReviewItem, Stance, Utterance, Vote
+from .models import (
+    Bill,
+    Person,
+    ReviewItem,
+    Stance,
+    Utterance,
+    UtteranceBillLink,
+    Vote,
+)
 
 
 class Store:
@@ -26,6 +34,7 @@ class Store:
         self.stances_path = self.root / "stances.jsonl"
         self.bills_path = self.root / "bills.jsonl"
         self.votes_path = self.root / "votes.jsonl"
+        self.bill_links_path = self.root / "utterance_bill_links.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -76,6 +85,15 @@ class Store:
 
     def load_votes(self) -> list[Vote]:
         return [Vote.from_dict(data) for data in _read_jsonl(self.votes_path)]
+
+    def save_bill_links(self, links: list[UtteranceBillLink]) -> None:
+        _write_jsonl(self.bill_links_path, [link.to_dict() for link in links])
+
+    def load_bill_links(self) -> list[UtteranceBillLink]:
+        return [
+            UtteranceBillLink.from_dict(data)
+            for data in _read_jsonl(self.bill_links_path)
+        ]
 
 
 _SQLITE_SCHEMA = """
@@ -143,6 +161,20 @@ CREATE TABLE IF NOT EXISTS votes (
 
 CREATE INDEX IF NOT EXISTS idx_votes_bill ON votes(bill_id);
 CREATE INDEX IF NOT EXISTS idx_votes_person_voted_at ON votes(person_id, voted_at);
+
+CREATE TABLE IF NOT EXISTS utterance_bill_links (
+    link_id TEXT PRIMARY KEY,
+    utterance_id TEXT NOT NULL,
+    bill_id TEXT NOT NULL,
+    method TEXT NOT NULL CHECK (method IN ('rule:title_match', 'llm:candidate')),
+    confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    human_reviewed INTEGER NOT NULL CHECK (human_reviewed IN (0, 1)),
+    list_order INTEGER NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_bill_links_utterance ON utterance_bill_links(utterance_id);
+CREATE INDEX IF NOT EXISTS idx_bill_links_bill ON utterance_bill_links(bill_id);
 
 CREATE TABLE IF NOT EXISTS reviews (
     review_id TEXT PRIMARY KEY,
@@ -603,6 +635,108 @@ class SqliteStore:
                     ],
                 )
                 after = conn.execute("SELECT COUNT(*) FROM votes").fetchone()[0]
+            return after - before
+        finally:
+            conn.close()
+
+    # -- utterance-bill links ------------------------------------------
+    @staticmethod
+    def _bill_link_values(link: UtteranceBillLink, list_order: int) -> tuple:
+        return (
+            link.link_id,
+            link.utterance_id,
+            link.bill_id,
+            link.method,
+            link.confidence,
+            int(link.human_reviewed),
+            list_order,
+            _json(link.to_dict()),
+        )
+
+    def save_bill_links(self, links: list[UtteranceBillLink]) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM utterance_bill_links")
+                conn.executemany(
+                    """
+                    INSERT INTO utterance_bill_links(
+                        link_id, utterance_id, bill_id, method, confidence,
+                        human_reviewed, list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        self._bill_link_values(link, index)
+                        for index, link in enumerate(links)
+                    ],
+                )
+        finally:
+            conn.close()
+
+    def load_bill_links(
+        self,
+        *,
+        utterance_id: str | None = None,
+        bill_id: str | None = None,
+        usable_only: bool = False,
+    ) -> list[UtteranceBillLink]:
+        where: list[str] = []
+        values: list[str] = []
+        if utterance_id:
+            where.append("utterance_id = ?")
+            values.append(utterance_id)
+        if bill_id:
+            where.append("bill_id = ?")
+            values.append(bill_id)
+        if usable_only:
+            where.append("(method = 'rule:title_match' OR human_reviewed = 1)")
+        sql = "SELECT payload_json FROM utterance_bill_links"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY list_order, link_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [
+                UtteranceBillLink.from_dict(json.loads(row["payload_json"]))
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def upsert_bill_links(self, links: list[UtteranceBillLink]) -> int:
+        conn = self._connect()
+        try:
+            with conn:
+                before = conn.execute(
+                    "SELECT COUNT(*) FROM utterance_bill_links"
+                ).fetchone()[0]
+                max_order = conn.execute(
+                    "SELECT COALESCE(MAX(list_order), -1) FROM utterance_bill_links"
+                ).fetchone()[0]
+                conn.executemany(
+                    """
+                    INSERT INTO utterance_bill_links(
+                        link_id, utterance_id, bill_id, method, confidence,
+                        human_reviewed, list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(link_id) DO UPDATE SET
+                        utterance_id = excluded.utterance_id,
+                        bill_id = excluded.bill_id,
+                        method = excluded.method,
+                        confidence = excluded.confidence,
+                        human_reviewed = excluded.human_reviewed,
+                        payload_json = excluded.payload_json
+                    WHERE utterance_bill_links.human_reviewed = 0
+                    """,
+                    [
+                        self._bill_link_values(link, max_order + index + 1)
+                        for index, link in enumerate(links)
+                    ],
+                )
+                after = conn.execute(
+                    "SELECT COUNT(*) FROM utterance_bill_links"
+                ).fetchone()[0]
             return after - before
         finally:
             conn.close()

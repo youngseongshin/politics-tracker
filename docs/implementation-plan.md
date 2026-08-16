@@ -26,7 +26,7 @@
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
 | `politics-tracker extract-stances` | 정책 축 입장 추출 | rules·Claude 페이크·인용구 가드 동작 |
-| `pytest` | 테스트 63건 | 전부 통과 |
+| `pytest` | 테스트 67건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -43,7 +43,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     63건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     67건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -426,6 +426,10 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 - T5.2 발언·의안 연결: 1차 규칙 기반(발언 텍스트에 의안명 또는 의안번호가 문자열로
   포함되면 `method: rule:title_match`, confidence 1.0). 2차 LLM 후보(의안명 유사
   언급)는 `method: llm:candidate`로 만들고 전건 검수 큐를 거친다.
+  **완료(2026-08-16):** `link-bills`의 rules·Claude 경로와 공개 스키마를 추가했다.
+  정확한 의안명·번호는 즉시 사용할 수 있고, 어휘로 좁힌 Claude 후보는 전건
+  `bill_link` 검수 큐를 거쳐 사람 승인 전에는 판정 쿼리에서 제외한다. 실데이터 의안
+  한 건은 본회의 발언 4건과 정확히 연결됐고 재실행 신규 건수는 0이었다.
 - T5.3 일치도 계산 `compute-consistency`: 판정 가능 조건을 만족하는
   (발언 입장, 표결) 쌍에서 일치 비율을 계산한다.
   판정 가능 조건: 입장 |value| 0.3 이상, 그리고 human_reviewed이거나 confidence

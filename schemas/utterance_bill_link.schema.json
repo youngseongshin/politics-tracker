@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/utterance_bill_link.schema.json",
+  "title": "UtteranceBillLink",
+  "description": "발언과 의안의 근거 연결. LLM 후보는 사람 승인 전에는 판정에 쓰지 않는다.",
+  "type": "object",
+  "required": [
+    "link_id", "utterance_id", "bill_id", "method", "confidence",
+    "extractor", "human_reviewed"
+  ],
+  "properties": {
+    "link_id": { "type": "string", "pattern": "^ubl_" },
+    "utterance_id": { "type": "string", "minLength": 1 },
+    "bill_id": { "type": "string", "pattern": "^bill_" },
+    "method": { "type": "string", "enum": ["rule:title_match", "llm:candidate"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "extractor": {
+      "type": "object",
+      "required": ["backend", "model", "prompt_version"],
+      "properties": {
+        "backend": { "type": "string" },
+        "model": { "type": "string" },
+        "prompt_version": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "human_reviewed": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}
