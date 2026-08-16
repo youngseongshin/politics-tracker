@@ -11,18 +11,59 @@
 <p class="notice">아직 수록된 발언이 없습니다.</p>
 {% endif %}
 
+<div id="active-topic-filter" class="active-filter" hidden>
+  <span><strong id="active-topic-label"></strong> 주제 발언만 표시합니다.</span>
+  <button type="button" id="reset-topic-filter" class="text-button">전체 보기</button>
+</div>
+
 {% for group in groups %}
+<section class="timeline-group">
 <div class="day"><span class="num">{{ group.spoken_at }}</span><span class="session">{{ group.session }}{% if group.committee and group.committee not in group.session %} · {{ group.committee }}{% endif %}</span></div>
   {% for u in group.utterances %}
-  <div class="utt" id="{{ u.utterance_id }}">
+  <div class="utt" id="{{ u.utterance_id }}" data-topics="{{ u.topics | join(' ') }}">
     <a class="permalink" href="#{{ u.utterance_id }}" aria-label="이 발언의 고유 링크" title="고유 링크">§</a>
     <div class="who">{{ u.speaker_name }}{% if u.speaker_role %}<span class="role">{{ u.speaker_role }}</span>{% endif %}
-      {%- for t in u.topics %}<span class="chip">{{ topic_labels.get(t, t) }}</span>{% endfor %}</div>
+      {%- for t in u.topics %}<button type="button" class="chip" data-topic="{{ t }}" data-topic-label="{{ topic_labels.get(t, t) }}" aria-pressed="false">{{ topic_labels.get(t, t) }}</button>{% endfor %}</div>
     <p class="speech">{{ u.text }}</p>
     <div class="srcline">출처:
       <a href="{{ u.source.url }}" rel="noopener">{{ u.source.title or "회의록 원문" }}</a>{% if u.source.retrieved_at %} · <span class="num">{{ u.source.retrieved_at[:10] }}</span> 수집{% endif %}
     </div>
   </div>
   {% endfor %}
+</section>
 {% endfor %}
+
+{% if groups %}
+<script>
+(function () {
+  "use strict";
+  var bar = document.getElementById("active-topic-filter");
+  var label = document.getElementById("active-topic-label");
+  var reset = document.getElementById("reset-topic-filter");
+
+  function applyTopic(topic, topicLabel) {
+    document.querySelectorAll(".utt").forEach(function (utterance) {
+      var topics = utterance.dataset.topics.split(" ").filter(Boolean);
+      utterance.hidden = Boolean(topic) && !topics.includes(topic);
+    });
+    document.querySelectorAll(".timeline-group").forEach(function (group) {
+      group.hidden = !Array.from(group.querySelectorAll(".utt")).some(function (utterance) {
+        return !utterance.hidden;
+      });
+    });
+    document.querySelectorAll(".chip").forEach(function (chip) {
+      chip.setAttribute("aria-pressed", String(Boolean(topic) && chip.dataset.topic === topic));
+    });
+    bar.hidden = !topic;
+    label.textContent = topicLabel || "";
+  }
+
+  document.addEventListener("click", function (event) {
+    var chip = event.target.closest(".chip");
+    if (chip) applyTopic(chip.dataset.topic, chip.dataset.topicLabel);
+  });
+  reset.addEventListener("click", function () { applyTopic("", ""); });
+}());
+</script>
+{% endif %}
 {% endblock %}

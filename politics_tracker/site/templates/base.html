@@ -87,9 +87,16 @@
   .permalink:hover { color: var(--accent); opacity: 1; text-decoration: none; }
   .who { font-size: 0.96rem; font-weight: 600; color: var(--sub); }
   .who .role { font-weight: 400; color: var(--muted); margin-left: 0.35rem; }
-  .chip { display: inline-block; font-size: 0.92rem; color: var(--accent);
+  .chip { display: inline-block; border: 0; font: inherit; font-size: 0.92rem; color: var(--accent);
           background: var(--accent-tint); border-radius: 6px;
-          padding: 0.05rem 0.5rem; margin-left: 0.45rem; vertical-align: 0.05em; }
+          padding: 0.05rem 0.5rem; margin-left: 0.45rem; vertical-align: 0.05em;
+          cursor: pointer; }
+  .chip:hover, .chip[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .active-filter { display: flex; align-items: center; justify-content: space-between;
+                   gap: 1rem; margin: 1.2rem 0 0; padding: 0.65rem 0;
+                   border-bottom: 1px solid var(--line); color: var(--sub); font-size: 0.94rem; }
+  .text-button { border: 0; background: none; color: var(--accent); font: inherit;
+                 font-size: 0.94rem; padding: 0.2rem; cursor: pointer; }
   .speech { white-space: pre-line; margin: 0.5rem 0 0.6rem; }
   .srcline { font-size: 0.92rem; color: var(--muted); }
   .srcline a { color: var(--sub); text-decoration: underline; text-underline-offset: 2px; }
