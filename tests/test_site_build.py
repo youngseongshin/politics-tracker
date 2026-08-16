@@ -1,8 +1,9 @@
-from politics_tracker.matching import match_utterances
-from politics_tracker.models import Person, Utterance
 import json
 
 import politics_tracker.site.build as site_build_module
+from politics_tracker.enrich.stances import load_stance_axes
+from politics_tracker.matching import match_utterances
+from politics_tracker.models import Person, ReviewItem, Stance, Utterance, stance_id_for
 from politics_tracker.site.build import build_site
 
 
@@ -58,7 +59,50 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
         ),
     ]
     match_utterances(utterances, people)
-    stats = build_site(people, utterances, tmp_path)
+    before = Stance(
+        stance_id=stance_id_for("u3", "housing_regulation", "stance_v1"),
+        utterance_id="u3",
+        person_id="p1",
+        axis="housing_regulation",
+        value=-0.6,
+        confidence=0.9,
+        rationale_quote="위원회 발언",
+        extractor={"backend": "test", "model": "test", "prompt_version": "stance_v1"},
+    )
+    after = Stance(
+        stance_id=stance_id_for("u1", "housing_regulation", "stance_v1"),
+        utterance_id="u1",
+        person_id="p1",
+        axis="housing_regulation",
+        value=0.3,
+        confidence=0.9,
+        rationale_quote="공급 확대",
+        extractor={"backend": "test", "model": "test", "prompt_version": "stance_v1"},
+    )
+    change = ReviewItem(
+        review_id="rev_change",
+        kind="stance_change",
+        target_id="stchg_1",
+        payload={
+            "person_id": "p1",
+            "axis": "housing_regulation",
+            "before_stance_id": before.stance_id,
+            "after_stance_id": after.stance_id,
+            "context_note": "두 원문과 당시 회의 맥락을 확인했습니다.",
+        },
+        reason="held:stance_change_requires_context",
+        status="approved",
+        created_at="2026-08-16T00:00:00Z",
+        decided_at="2026-08-16T01:00:00Z",
+    )
+    stats = build_site(
+        people,
+        utterances,
+        tmp_path,
+        stances=[before, after],
+        stance_axes=load_stance_axes(),
+        reviews=[change],
+    )
 
     assert stats.people_pages == 2
     assert stats.utterances_rendered == 2
@@ -80,6 +124,12 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
     assert "제20대, 제21대, 제22대" in p1
     assert "국토교통위원회" in p1
     assert "위원회 발언입니다." in p1
+    assert "정책 축별 입장 이력" in p1
+    assert "규제 완화·공급 확대 우선" in p1
+    assert 'style="left: 20.0%"' in p1
+    assert 'style="left: 65.0%"' in p1
+    assert "확인된 입장 변화" in p1
+    assert "두 원문과 당시 회의 맥락을 확인했습니다." in p1
     assert "https://example.invalid/minutes/1" in p1  # 발언마다 원문 링크
 
     p2 = (tmp_path / "person" / "p2.html").read_text(encoding="utf-8")

@@ -33,6 +33,7 @@
   main { padding: 2.75rem 0 4.5rem; }
   h1 { font-size: 1.62rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 0.4rem; }
   h2 { font-size: 1.09rem; font-weight: 700; letter-spacing: -0.01em; margin: 2.2rem 0 0.5rem; }
+  h3 { font-size: 1rem; font-weight: 700; margin: 1.5rem 0 0.4rem; }
   p { margin: 0.55rem 0; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -75,6 +76,30 @@
   .topic-utterance:first-of-type { border-top-color: var(--line-strong); }
   .topic-utterance .meta { color: var(--sub); font-size: 0.94rem; }
 
+  .stance-axis { margin: 1.35rem 0 2rem; padding-top: 0.2rem; }
+  .stance-poles { display: flex; justify-content: space-between; gap: 1rem; color: var(--muted);
+                  font-size: 0.92rem; }
+  .stance-poles span:last-child { text-align: right; }
+  .stance-entry { margin: 0.85rem 0 1.15rem; }
+  .stance-entry-meta { display: flex; justify-content: space-between; gap: 1rem;
+                       color: var(--sub); font-size: 0.94rem; }
+  .stance-track { position: relative; height: 0.65rem; margin: 0.45rem 0 0.4rem;
+                  border-radius: 999px; background: linear-gradient(90deg, #dde8fb, #f0f2f5 50%, #f9dfdf); }
+  .stance-track::after { content: ""; position: absolute; left: 50%; top: -0.2rem; bottom: -0.2rem;
+                         width: 1px; background: var(--line-strong); }
+  .stance-point { position: absolute; top: 50%; width: 0.9rem; height: 0.9rem;
+                  border-radius: 50%; background: var(--accent); transform: translate(-50%, -50%);
+                  box-shadow: 0 0 0 3px var(--bg); z-index: 1; }
+  .stance-rationale { color: var(--sub); font-size: 0.94rem; margin: 0.35rem 0; }
+  .stance-method { color: var(--muted); font-size: 0.92rem; }
+  .stance-change { margin: 1.2rem 0 1.8rem; padding-top: 1.1rem; border-top: 1px solid var(--line-strong); }
+  .change-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem;
+                 margin: 0.7rem 0; }
+  .change-side { min-width: 0; }
+  .change-side .label { color: var(--muted); font-size: 0.92rem; }
+  .change-note { background: var(--tint); border-radius: 8px; padding: 0.75rem 0.9rem;
+                 color: var(--sub); font-size: 0.94rem; }
+
   /* 발언 타임라인: 날짜 아래 발언을 여백과 구분선으로 나눈다 */
   .day { margin: 2.4rem 0 0; padding-top: 1.1rem; border-top: 1px solid var(--line-strong);
          font-weight: 700; font-size: 1.02rem; }
@@ -112,6 +137,7 @@
   @media (max-width: 480px) {
     body { font-size: 15px; }
     h1 { font-size: 1.45rem; }
+    .change-pair { grid-template-columns: 1fr; }
   }
 </style>
 </head>

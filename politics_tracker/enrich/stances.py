@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,30 +28,106 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 DEFAULT_BATCH_SIZE = 20
 
 
-_RULE_PHRASES: dict[str, dict[int, tuple[str, ...]]] = {
+RULES_PROMPT_VERSION = "stance_rules_v2"
+
+
+# 단어가 등장했다는 사실만으로 입장을 만들지 않는다. 아래 패턴은 주체가 정책을
+# 추진·유지·폐기해야 한다고 명시한 문형만 포함한다. 인용이나 반대 논거에서 자주
+# 등장하는 "검찰개혁", "탈원전", "증세" 같은 단독 명사는 의도적으로 제외한다.
+_RULE_PATTERNS: dict[str, dict[int, tuple[str, ...]]] = {
     "housing_regulation": {
-        -1: ("규제를 완화", "재건축 규제 완화", "주택 공급을 확대", "공급 확대"),
-        1: ("규제를 강화", "투기를 억제", "다주택자 규제"),
+        -1: (
+            r"재건축\s*규제(?:를)?\s*완화",
+            r"주택\s*공급(?:을)?\s*(?:대폭\s*)?(?:확대|늘려|늘리)",
+            r"공급\s*확대(?:가|를)?\s*(?:필요|우선|해야|하겠|추진)",
+            r"공급대책(?:도|이)\s*있어야",
+            r"규제(?:를)?\s*완화(?:해야|하겠|할\s*필요)",
+        ),
+        1: (
+            r"투기(?:를)?\s*억제(?:해야|하겠|할\s*필요)",
+            r"규제(?:를)?\s*강화(?:해야|하겠|할\s*필요)",
+            r"다주택자\s*규제(?:를)?\s*(?:강화|유지)",
+        ),
     },
     "fiscal_policy": {
-        -1: ("재정 건전성", "감세", "세 부담을 낮"),
-        1: ("확장 재정", "재정을 확대", "증세"),
+        -1: (
+            r"재정\s*건전성(?:을)?\s*(?:지켜|지키|확보|우선)",
+            r"감세(?:를)?\s*(?:추진|확대|해야|하겠)",
+            r"세\s*부담(?:을)?\s*(?:낮추|줄이|완화)",
+        ),
+        1: (
+            r"확장\s*재정(?:을|으로)?\s*(?:추진|전환|해야|하겠|필요)",
+            r"재정(?:을)?\s*(?:확대|확장)(?:해야|하겠|할\s*필요)",
+            r"증세(?:가)?\s*(?:필요|불가피|해야)",
+            r"세율(?:을)?\s*(?:인상|올려|올리)",
+        ),
     },
     "labor_hours": {
-        -1: ("근로시간 유연화", "근로시간을 유연"),
-        1: ("근로시간을 단축", "주 4.5일", "주 4일"),
+        -1: (
+            r"근로시간(?:을)?\s*(?:유연화|유연하게)",
+            r"근로시간\s*유연화(?:가)?\s*(?:필요|추진|해야)",
+        ),
+        1: (
+            r"근로시간(?:을)?\s*(?:단축|줄여|줄이)",
+            r"주\s*4(?:\.5)?일제?(?:를)?\s*(?:도입|추진|시행|해야)",
+        ),
     },
     "nuclear_energy": {
-        -1: ("탈원전", "원전을 축소"),
-        1: ("원전을 확대", "원전 확대", "원전 생태계"),
+        -1: (
+            r"원전(?:을|의\s*비중을)?\s*(?:축소|줄여|줄이)",
+            r"탈원전(?:을)?\s*(?:추진|지속|완수|해야)",
+            r"재생에너지(?:로의)?\s*전환(?:을)?\s*(?:추진|가속|해야)",
+            r"원전\s*건설계획을\s*강행[\s\S]{0,80}?유감",
+        ),
+        1: (
+            r"원전(?:을|의\s*비중을)?\s*(?:확대|늘려|늘리)(?:야|겠|할\s*필요|해야)",
+            r"원전\s*확대(?:가)?\s*(?:필요|추진해야|해야)",
+            r"원전\s*생태계(?:를)?\s*(?:복원|회복|재건|살리)",
+            r"원전\s*생태계\s*활성화에\s*정책을\s*집중하겠습니다",
+            r"원전과\s*재생에너지를\s*믹스해서\s*가야",
+            r"원전(?:이)?\s*적절하게\s*기저전원\s*역할을\s*해야",
+            r"원전\s*없이\s*할\s*수\s*있다고\s*얘기해\s*본\s*적\s*없",
+            r"신규\s*원전(?:을)?\s*포함하겠다고\s*말씀하셔야",
+            r"원전\s*폐기\s*정책이\s*얼마나\s*위험한\s*정책",
+            r"탈원전\s*정책(?:을)?\s*(?:폐기|철회|중단)",
+            r"탈원전\s*정책으로[^.!?\n]{0,80}(?:비용|손실|붕괴|무너)",
+        ),
     },
     "prosecution_reform": {
-        -1: ("검찰 권한을 유지", "검찰 수사권을 보장"),
-        1: ("검찰 권한을 축소", "검찰개혁", "수사와 기소를 분리", "검찰청 폐지"),
+        -1: (
+            r"검찰\s*권한(?:을|은)?\s*(?:유지|보강)",
+            r"검찰\s*수사권(?:을|은)?\s*(?:보장|유지)",
+            r"보완수사권(?:의)?\s*(?:존치|유지)(?:가|는|를)?\s*(?:필요|해야)",
+            r"보완수사권마저\s*없어진다면",
+            r"모든\s*권한을\s*박탈하는\s*것은\s*잘못",
+            r"수사와\s*기소를\s*분리하는\s*것이\s*절대\s*진리",
+            r"왜[^.!?\n]{0,80}보완수사권을\s*완전히\s*폐지해야",
+            r"왜[^.!?\n]{0,80}검찰청(?:\s*자체)?를\s*폐지해야",
+            r"검찰청(?:을|\s*자체를)?\s*폐지[^.!?\n]{0,100}분노하지\s*않을\s*수\s*없",
+        ),
+        1: (
+            r"검찰\s*권한(?:을)?\s*(?:축소|분산)(?:해야|하겠|할\s*필요)",
+            r"수사와\s*기소를\s*분리하고[^.!?\n]{0,240}(?:권한[^.!?\n]{0,40}새롭게\s*정립|인권\s*보장을\s*강화)",
+            r"검찰개혁\s*완수",
+            r"검찰개혁의\s*완성을\s*목전[^.!?\n]{0,120}찬성토론",
+            r"검찰청(?:을)?\s*폐지(?:해야|하겠|에\s*찬성)",
+        ),
     },
     "north_korea": {
-        -1: ("대북 제재", "압박과 억지", "강력한 억지"),
-        1: ("남북 대화", "대화와 교류", "대북 교류"),
+        -1: (
+            r"대북\s*제재(?:를)?\s*(?:강화|유지|해야)",
+            r"대북\s*(?:압박|억지)(?:를)?\s*(?:강화|우선|해야)",
+            r"강력한\s*억지(?:가|를)?\s*(?:필요|구축|유지)",
+        ),
+        1: (
+            r"남북\s*대화(?:를)?\s*(?:재개|확대|추진|해야)",
+            r"(?:대화|교류)(?:와|·)\s*(?:교류|협력)(?:을)?\s*(?:확대|추진|강화|해야)",
+            r"대북\s*교류(?:를)?\s*(?:확대|추진|재개|해야)",
+            r"북한과\s*교류\s*협력하면서",
+            r"북한과의\s*교류·협력이[^.!?\n]{0,180}확신",
+            r"북한과\s*문화재\s*교류\s*사업들[^.!?\n]{0,120}적극적으로",
+            r"남북\s*대화를\s*견인",
+        ),
     },
 }
 
@@ -114,8 +191,12 @@ def _candidate_pairs(
     return pairs
 
 
-def _first_phrase(text: str, phrases: tuple[str, ...]) -> str | None:
-    found = [(text.find(phrase), phrase) for phrase in phrases if phrase in text]
+def _first_match(text: str, patterns: tuple[str, ...]) -> str | None:
+    found = []
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            found.append((match.start(), match.group(0)))
     if not found:
         return None
     return min(found, key=lambda item: item[0])[1]
@@ -135,9 +216,9 @@ def extract_stances_rules(
     stats = {"candidates": 0, "extracted": 0, "held": 0}
     for utterance, axis in _candidate_pairs(utterances, axes):
         stats["candidates"] += 1
-        phrases = _RULE_PHRASES.get(axis.key, {})
-        negative = _first_phrase(utterance.text, phrases.get(-1, ()))
-        positive = _first_phrase(utterance.text, phrases.get(1, ()))
+        patterns = _RULE_PATTERNS.get(axis.key, {})
+        negative = _first_match(utterance.text, patterns.get(-1, ()))
+        positive = _first_match(utterance.text, patterns.get(1, ()))
         if not negative and not positive:
             continue
         held_reason = "conflicting_rule_phrases" if negative and positive else None
@@ -145,7 +226,7 @@ def extract_stances_rules(
         quote = negative or positive or ""
         stance = Stance(
             stance_id=stance_id_for(
-                utterance.utterance_id, axis.key, "stance_rules_v1"
+                utterance.utterance_id, axis.key, RULES_PROMPT_VERSION
             ),
             utterance_id=utterance.utterance_id,
             person_id=utterance.person_id,
@@ -156,7 +237,7 @@ def extract_stances_rules(
             extractor={
                 "backend": "rules",
                 "model": "deterministic",
-                "prompt_version": "stance_rules_v1",
+                "prompt_version": RULES_PROMPT_VERSION,
             },
             held_reason=held_reason,
         )
@@ -366,6 +447,27 @@ def stance_change_id_for(before_stance_id: str, after_stance_id: str) -> str:
     return "stchg_" + hashlib.sha256(canonical).hexdigest()[:16]
 
 
+def select_best_stances(
+    stances: list[Stance], utterances: list[Utterance]
+) -> list[Stance]:
+    """발언·축별로 사람 확정, 신뢰도, ID 순서의 최선 공개 버전을 고른다."""
+    utterance_ids = {utterance.utterance_id for utterance in utterances}
+    best: dict[tuple[str, str, str], Stance] = {}
+    for stance in stances:
+        if stance.held_reason or stance.utterance_id not in utterance_ids:
+            continue
+        key = (stance.person_id, stance.axis, stance.utterance_id)
+        current = best.get(key)
+        rank = (int(stance.human_reviewed), stance.confidence, stance.stance_id)
+        if current is None or rank > (
+            int(current.human_reviewed),
+            current.confidence,
+            current.stance_id,
+        ):
+            best[key] = stance
+    return list(best.values())
+
+
 def detect_stance_changes(
     stances: list[Stance],
     utterances: list[Utterance],
@@ -377,24 +479,8 @@ def detect_stance_changes(
         raise ValueError("stance change threshold must be between 0 and 2")
     utterance_by_id = {utterance.utterance_id: utterance for utterance in utterances}
 
-    # 같은 발언·축을 여러 추출기 버전이 평가했다면 사람 확정, 신뢰도, ID 순으로
-    # 하나만 선택해 추출기 교체를 입장 변화로 오인하지 않는다.
-    best: dict[tuple[str, str, str], Stance] = {}
-    for stance in stances:
-        if stance.held_reason or stance.utterance_id not in utterance_by_id:
-            continue
-        key = (stance.person_id, stance.axis, stance.utterance_id)
-        current = best.get(key)
-        rank = (int(stance.human_reviewed), stance.confidence, stance.stance_id)
-        if current is None or rank > (
-            int(current.human_reviewed),
-            current.confidence,
-            current.stance_id,
-        ):
-            best[key] = stance
-
     grouped: dict[tuple[str, str], list[Stance]] = defaultdict(list)
-    for stance in best.values():
+    for stance in select_best_stances(stances, utterances):
         grouped[(stance.person_id, stance.axis)].append(stance)
 
     changes: list[dict[str, Any]] = []

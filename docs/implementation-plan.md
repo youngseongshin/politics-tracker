@@ -20,19 +20,19 @@
 | `politics-tracker quickstart` | 가상 샘플로 수집, 파싱, 매칭, 주제분류, 사이트 생성 전체 루프 | 동작 |
 | `politics-tracker verify-api` | 실 API 접속, 서비스 ID, 필드 매핑 검증 | 현역 299명 실 API 검증 완료 |
 | `politics-tracker fetch-members` | 의원 명부 수집 | 제22대 현역 299명 실 API 검증 완료 |
-| `politics-tracker fetch-minutes` | 회의록 목록 조회, 원문 다운로드, 발언 추출, 병합 | 본회의 5건·발언 242건 실 API 검증 완료 |
+| `politics-tracker fetch-minutes` | 회의록 목록 조회, 원문 다운로드, 발언 추출, 병합 | 본회의 31건·위원회 1건·발언 5,140건 실 API 검증 완료 |
 | `politics-tracker parse-minutes` | 텍스트 파일에서 발언 추출 | 동작 |
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
 | `politics-tracker extract-stances` | 정책 축 입장 추출 | rules·Claude 페이크·인용구 가드 동작 |
-| `pytest` | 테스트 56건 | 전부 통과 |
+| `pytest` | 테스트 58건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
 ```text
 politics_tracker/
-├── models.py              Person / Utterance / ReviewItem. 출처·검수 불변성 강제
+├── models.py              Person / Utterance / ReviewItem / Stance. 출처·검수 불변성 강제
 ├── storage.py             SQLite 운영 저장소 + JSONL 교환 저장소
 ├── matching.py            화자 매칭. 동명이인은 person_id를 붙이지 않고 보류
 ├── sources/
@@ -43,7 +43,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     56건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     58건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -388,8 +388,11 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
   **완료(2026-08-16):** 결정적 rules 폴백과 Claude 구조화 출력 경로를 구현했다.
   낮은 신뢰도, refusal, 범위 밖 숫자, 원문에 없는 인용구는 held stance와 검수 항목으로
   저장한다. 승인 시 인용구를 다시 대조하고 사람이 확정한 입장은 재추출로 덮지 않는다.
-  실데이터 rules 실행에서는 후보 146건 중 19건을 공개 가능 입장으로 추출했고 재실행
-  신규 건수는 0이었다.
+  단독 정책명이나 타인의 주장 인용을 입장으로 보던 초기 규칙은 폐기하고 명시적 주장
+  문형만 인정하는 `stance_rules_v2`로 교체했다. 규칙 버전 변경 시 사람 검수 레코드는
+  보존하면서 이전 자동 공개 결과만 제거한다. 본회의 31건과 위원회 1건의 발언 5,140건을
+  대상으로 한 실데이터 실행에서는 주제·축 후보 1,916쌍 중 공개 21건, 문맥 충돌 보류
+  2건이 나왔고 같은 입력 재실행의 신규·제거 건수는 모두 0이었다.
 - T4.3 변화 감지: 같은 인물·같은 축에서 시간순 인접 값의 차이가 0.8 이상이면
   stance_change 후보를 만든다. 후보는 전건 검수 큐로 보내고 승인 전에는 사이트에
   싣지 않는다. 승인 시 맥락 주석(당적 변경, 지역구 변경 등)을 함께 기록한다.
@@ -399,8 +402,15 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 - T4.4 사이트: 인물 페이지에 축별 입장 이력 섹션. 시계열은 HTML 요소로 그린다
   (유동 폭 SVG 금지, §1.3). 각 점은 근거 발언 퍼머링크다. 변화 항목은 변경 전후
   발언 두 건을 나란히 싣고 주석을 병기한다.
+  **완료(2026-08-16):** 17개 인물 페이지에 21개 입장점을 HTML 트랙으로 표시하고
+  모든 점을 같은 페이지의 근거 발언 앵커에 연결했다. 승인된 변화만 전후 근거와 맥락
+  주석을 나란히 표시한다. 실데이터 21개 링크가 실제 앵커를 가리키는지 전건 검증했다.
 - 완료 기준: 표본 20건 수동 대조에서 방향 오류(부호 반대) 0건. 보류율과 표본
   대조 결과를 사용자에게 보고한다. 지표에서 근거 발언까지 클릭 두 번 안에 도달한다.
+  **충족(2026-08-16):** 공개 21건 전건을 원문 문맥과 수동 대조해 방향 오류 0건이었다.
+  명시적 입장으로 판정한 23건 중 2건을 충돌로 보류해 보류율은 8.7%였다. 전체 주제·축
+  후보 1,916쌍 중 명시적 입장이 없는 1,893쌍은 만들지 않았다. 공개 입장점에서 근거
+  발언까지는 한 번의 클릭으로 이동한다.
 
 ### M5. 표결 수집과 말-표 일치도
 

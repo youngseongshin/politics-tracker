@@ -353,6 +353,70 @@ class SqliteStore:
         finally:
             conn.close()
 
+    def sync_unreviewed_stances(
+        self, stances: list[Stance], *, backend: str
+    ) -> tuple[int, int]:
+        """결정적 추출기의 공개 결과를 현재 규칙 버전과 정확히 맞춘다.
+
+        사람이 승인한 레코드와 검수 대기 중인 held 레코드는 보존한다. 공개 가능한
+        자동 결과만 교체하므로 규칙 버전이 바뀌어도 과거 자동 판정이 사이트에 남지
+        않는다. 반환값은 ``(신규 ID 수, 제거한 구버전 수)``다.
+        """
+        if any(stance.extractor.get("backend") != backend for stance in stances):
+            raise ValueError("all synced stances must use the requested backend")
+        desired = {
+            stance.stance_id
+            for stance in stances
+            if not stance.human_reviewed and stance.held_reason is None
+        }
+        conn = self._connect()
+        try:
+            with conn:
+                all_existing = {
+                    row[0] for row in conn.execute("SELECT stance_id FROM stances")
+                }
+                existing_public = {
+                    row[0]
+                    for row in conn.execute(
+                        """
+                        SELECT stance_id FROM stances
+                        WHERE human_reviewed = 0 AND held_reason IS NULL
+                          AND json_extract(payload_json, '$.extractor.backend') = ?
+                        """,
+                        (backend,),
+                    )
+                }
+                conn.execute(
+                    """
+                    DELETE FROM stances
+                    WHERE human_reviewed = 0 AND held_reason IS NULL
+                      AND json_extract(payload_json, '$.extractor.backend') = ?
+                    """,
+                    (backend,),
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO stances(
+                        stance_id, utterance_id, person_id, axis, value, confidence,
+                        human_reviewed, held_reason, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(stance_id) DO UPDATE SET
+                        utterance_id = excluded.utterance_id,
+                        person_id = excluded.person_id,
+                        axis = excluded.axis,
+                        value = excluded.value,
+                        confidence = excluded.confidence,
+                        human_reviewed = excluded.human_reviewed,
+                        held_reason = excluded.held_reason,
+                        payload_json = excluded.payload_json
+                    WHERE stances.human_reviewed = 0
+                    """,
+                    [self._stance_values(stance) for stance in stances],
+                )
+            return len(desired - all_existing), len(existing_public - desired)
+        finally:
+            conn.close()
+
     # -- reviews --------------------------------------------------------
     @staticmethod
     def _review_values(review: ReviewItem) -> tuple:

@@ -273,7 +273,11 @@ def cmd_extract_stances(args: argparse.Namespace) -> int:
             batch_size=args.batch_size,
             confidence_threshold=args.confidence_threshold,
         )
-    added = store.upsert_stances(stances)
+    removed = 0
+    if args.backend == "rules":
+        added, removed = store.sync_unreviewed_stances(stances, backend="rules")
+    else:
+        added = store.upsert_stances(stances)
     queued = 0
     for stance in stances:
         if not stance.held_reason:
@@ -291,6 +295,7 @@ def cmd_extract_stances(args: argparse.Namespace) -> int:
         )
         queued += int(store.enqueue_review(review))
     stats["stored_new"] = added
+    stats["stale_published_removed"] = removed
     stats["queued_for_review"] = queued
     print(f"입장 추출({args.backend}): {stats}")
     return 0
@@ -387,13 +392,22 @@ def cmd_verify_api(args: argparse.Namespace) -> int:
 
 
 def cmd_build_site(args: argparse.Namespace) -> int:
+    from .enrich.stances import load_stance_axes
+
     store = SqliteStore(args.db)
     people = store.load_people()
     utterances = store.load_utterances()
     if not people:
         print("저장소에 인물이 없습니다. fetch-members 또는 quickstart를 먼저 실행하세요.", file=sys.stderr)
         return 1
-    stats = build_site(people, utterances, args.out)
+    stats = build_site(
+        people,
+        utterances,
+        args.out,
+        stances=store.load_stances(),
+        stance_axes=load_stance_axes(args.axes),
+        reviews=store.load_reviews(),
+    )
     print(f"인물 페이지 {stats.people_pages}개, 발언 {stats.utterances_rendered}건 렌더링 "
           f"(미귀속 {stats.unmatched_utterances}건) -> {Path(args.out) / 'index.html'}")
     return 0
@@ -680,6 +694,7 @@ def build_parser() -> argparse.ArgumentParser:
     b = sub.add_parser("build-site", help="저장소 데이터로 정적 사이트 생성")
     b.add_argument("--db", default=DEFAULT_DB_PATH)
     b.add_argument("--out", default="site_out")
+    b.add_argument("--axes", default="config/stance_axes.yaml")
     b.set_defaults(func=cmd_build_site)
 
     migrate = sub.add_parser("migrate-store", help="기존 JSONL 저장소를 SQLite로 이관")

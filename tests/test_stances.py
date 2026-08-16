@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from politics_tracker import cli
 from politics_tracker.enrich.stances import (
+    RULES_PROMPT_VERSION,
     detect_stance_changes,
     extract_stances_claude,
     extract_stances_rules,
@@ -16,7 +17,7 @@ from politics_tracker.storage import SqliteStore
 
 def _stance(*, reviewed=False, value=-0.7):
     return Stance(
-        stance_id=stance_id_for("utt_1", "housing_regulation", "stance_rules_v1"),
+        stance_id=stance_id_for("utt_1", "housing_regulation", RULES_PROMPT_VERSION),
         utterance_id="utt_1",
         person_id="p1",
         axis="housing_regulation",
@@ -26,7 +27,7 @@ def _stance(*, reviewed=False, value=-0.7):
         extractor={
             "backend": "rules",
             "model": "deterministic",
-            "prompt_version": "stance_rules_v1",
+            "prompt_version": RULES_PROMPT_VERSION,
         },
         human_reviewed=reviewed,
     )
@@ -94,11 +95,79 @@ def test_rules_extract_direction_and_hold_conflicting_phrases():
     assert extracted[0].held_reason is None
     assert stats["extracted"] == 1
 
-    conflict = _utterance("공급 확대와 함께 투기를 억제해야 합니다.")
+    conflict = _utterance("공급 확대가 필요하고 투기를 억제해야 합니다.")
     held, held_stats = extract_stances_rules([conflict], axes)
     assert held[0].value == 0
     assert held[0].held_reason == "conflicting_rule_phrases"
     assert held_stats["held"] == 1
+
+
+def test_rules_require_an_explicit_position_and_read_contextual_direction():
+    axes = load_stance_axes()
+    mere_mentions = [
+        (_utterance("불안 증세를 보이며 폭압정치를 이어 가고 있습니다."), "economy"),
+        (_utterance("검찰개혁 하겠다고 외치면서 무엇을 했습니까?"), "justice"),
+        (_utterance("수사와 기소를 분리하겠다라고 해서 시작됐습니다."), "justice"),
+        (
+            _utterance("피해자 권리 보장은 검찰개혁을 완성시킬 필수 조건입니다."),
+            "justice",
+        ),
+        (_utterance("원전 확대 답을 정해 놓은 여론조사입니다."), "environment_energy"),
+        (
+            _utterance("검찰청 폐지를 추진한 정부와 여당의 논리는 부족합니다."),
+            "justice",
+        ),
+    ]
+    for utterance, topic in mere_mentions:
+        utterance.topics = [topic]
+    extracted, _ = extract_stances_rules(
+        [utterance for utterance, _ in mere_mentions], axes
+    )
+    assert extracted == []
+
+    critique = _utterance(
+        "탈원전 정책으로 2030년까지 47조 원의 비용이 발생한 것으로 추정했습니다."
+    )
+    critique.topics = ["environment_energy"]
+    extracted, _ = extract_stances_rules([critique], axes)
+    assert len(extracted) == 1
+    assert extracted[0].axis == "nuclear_energy"
+    assert extracted[0].value == 0.7
+    assert "비용" in extracted[0].rationale_quote
+
+    opposed = _utterance(
+        "정부는 원전 건설계획을 강행하겠다고 밝혔습니다. 심히 유감입니다."
+    )
+    opposed.topics = ["environment_energy"]
+    extracted, _ = extract_stances_rules([opposed], axes)
+    assert len(extracted) == 1
+    assert extracted[0].value == -0.7
+    assert "유감" in extracted[0].rationale_quote
+
+
+def test_rules_sync_removes_stale_public_results_but_preserves_human_review(tmp_path):
+    store = SqliteStore(tmp_path / "db.sqlite")
+    stale = Stance(
+        stance_id=stance_id_for("utt_old", "housing_regulation", "stance_rules_v1"),
+        utterance_id="utt_old",
+        person_id="p1",
+        axis="housing_regulation",
+        value=0.7,
+        confidence=0.86,
+        rationale_quote="규제 강화",
+        extractor={
+            "backend": "rules",
+            "model": "deterministic",
+            "prompt_version": "stance_rules_v1",
+        },
+    )
+    reviewed = _stance(reviewed=True)
+    store.save_stances([stale, reviewed])
+    replacement = _stance(value=-0.7)
+
+    assert store.sync_unreviewed_stances([replacement], backend="rules") == (0, 1)
+    assert store.load_stances() == [reviewed]
+    assert store.sync_unreviewed_stances([replacement], backend="rules") == (0, 0)
 
 
 def test_normalized_quote_guard_accepts_only_original_text():
@@ -175,7 +244,7 @@ def test_extract_stances_cli_is_idempotent_and_queues_held(tmp_path):
     store = SqliteStore(db_path)
     store.save_people([Person(person_id="p1", name="이가상")])
     store.save_utterances(
-        [_utterance("공급 확대와 함께 투기를 억제해야 합니다.")]
+        [_utterance("공급 확대가 필요하고 투기를 억제해야 합니다.")]
     )
     args = Namespace(
         db=str(db_path),

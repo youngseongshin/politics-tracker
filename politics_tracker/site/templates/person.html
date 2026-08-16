@@ -11,6 +11,57 @@
 <p class="notice">아직 수록된 발언이 없습니다.</p>
 {% endif %}
 
+{% if stance_histories %}
+<section id="stances">
+  <h2>정책 축별 입장 이력</h2>
+  <p class="muted">축의 양쪽 끝은 정책 방향을 뜻하며 우열이나 평가 등급이 아닙니다. 각 점은 판단 근거 발언으로 연결됩니다.</p>
+  {% for history in stance_histories %}
+  <div class="stance-axis">
+    <h3>{{ history.axis.label }}</h3>
+    <div class="stance-poles"><span>−1 · {{ history.axis.negative_pole }}</span><span>+1 · {{ history.axis.positive_pole }}</span></div>
+    {% for item in history.points %}
+    <div class="stance-entry">
+      <div class="stance-entry-meta">
+        <a href="#{{ item.utterance.utterance_id }}"><span class="num">{{ item.utterance.spoken_at }}</span> 근거 발언</a>
+        <span class="num">{{ item.value_label }}</span>
+      </div>
+      <div class="stance-track" aria-label="{{ history.axis.label }} 값 {{ item.value_label }}">
+        <a class="stance-point" style="left: {{ item.position }}%" href="#{{ item.utterance.utterance_id }}" aria-label="{{ item.utterance.spoken_at }} 근거 발언"></a>
+      </div>
+      <p class="stance-rationale">근거 구절: “{{ item.stance.rationale_quote }}”</p>
+      <p class="stance-method">신뢰도 <span class="num">{{ "%.2f" | format(item.stance.confidence) }}</span> · {{ item.stance.extractor.backend }} · {{ item.stance.extractor.prompt_version }}{% if item.stance.human_reviewed %} · 사람 검수 완료{% endif %}</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if stance_changes %}
+<section id="stance-changes">
+  <h2>확인된 입장 변화</h2>
+  <p class="muted">두 발언의 축 값 차이가 0.8 이상이고 사람이 맥락을 확인한 항목만 표시합니다.</p>
+  {% for change in stance_changes %}
+  <article class="stance-change">
+    <h3>{{ change.axis.label }}</h3>
+    <div class="change-pair">
+      <div class="change-side">
+        <div class="label">변경 전 · <span class="num">{{ change.before.utterance.spoken_at }}</span> · 값 <span class="num">{{ "%+.1f" | format(change.before.stance.value) }}</span></div>
+        <p>“{{ change.before.stance.rationale_quote }}”</p>
+        <a href="#{{ change.before.utterance.utterance_id }}">변경 전 근거 발언</a>
+      </div>
+      <div class="change-side">
+        <div class="label">변경 후 · <span class="num">{{ change.after.utterance.spoken_at }}</span> · 값 <span class="num">{{ "%+.1f" | format(change.after.stance.value) }}</span></div>
+        <p>“{{ change.after.stance.rationale_quote }}”</p>
+        <a href="#{{ change.after.utterance.utterance_id }}">변경 후 근거 발언</a>
+      </div>
+    </div>
+    <p class="change-note">맥락 주석: {{ change.review.payload.context_note }}</p>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
 <div id="active-topic-filter" class="active-filter" hidden>
   <span><strong id="active-topic-label"></strong> 주제 발언만 표시합니다.</span>
   <button type="button" id="reset-topic-filter" class="text-button">전체 보기</button>

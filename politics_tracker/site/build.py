@@ -16,7 +16,8 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..enrich.topics import TOPIC_LABELS
-from ..models import Person, Utterance
+from ..enrich.stances import StanceAxis, select_best_stances
+from ..models import Person, ReviewItem, Stance, Utterance
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -153,11 +154,103 @@ def _topic_rows(
     return summaries, by_topic
 
 
-def build_site(people: list[Person], utterances: list[Utterance], out_dir: str | Path) -> BuildStats:
+def _stance_histories(
+    person_id: str,
+    stances: list[Stance],
+    utterances: list[Utterance],
+    axes: list[StanceAxis],
+) -> list[dict]:
+    utterance_by_id = {utterance.utterance_id: utterance for utterance in utterances}
+    grouped: dict[str, list[Stance]] = defaultdict(list)
+    for stance in select_best_stances(stances, utterances):
+        if stance.person_id == person_id:
+            grouped[stance.axis].append(stance)
+
+    histories = []
+    for axis in axes:
+        items = grouped.get(axis.key, [])
+        if not items:
+            continue
+        items.sort(
+            key=lambda stance: (
+                utterance_by_id[stance.utterance_id].spoken_at,
+                utterance_by_id[stance.utterance_id].order,
+                stance.stance_id,
+            )
+        )
+        histories.append(
+            {
+                "axis": axis,
+                "points": [
+                    {
+                        "stance": stance,
+                        "utterance": utterance_by_id[stance.utterance_id],
+                        "position": round((stance.value + 1) * 50, 3),
+                        "value_label": f"{stance.value:+.1f}",
+                    }
+                    for stance in items
+                ],
+            }
+        )
+    return histories
+
+
+def _approved_stance_changes(
+    person_id: str,
+    reviews: list[ReviewItem],
+    stances: list[Stance],
+    utterances: list[Utterance],
+    axes: list[StanceAxis],
+) -> list[dict]:
+    stance_by_id = {stance.stance_id: stance for stance in stances}
+    utterance_by_id = {utterance.utterance_id: utterance for utterance in utterances}
+    axes_by_key = {axis.key: axis for axis in axes}
+    changes = []
+    for review in reviews:
+        payload = review.payload
+        if (
+            review.kind != "stance_change"
+            or review.status != "approved"
+            or payload.get("person_id") != person_id
+        ):
+            continue
+        before = stance_by_id.get(payload.get("before_stance_id"))
+        after = stance_by_id.get(payload.get("after_stance_id"))
+        if not before or not after:
+            continue
+        before_utterance = utterance_by_id.get(before.utterance_id)
+        after_utterance = utterance_by_id.get(after.utterance_id)
+        axis = axes_by_key.get(payload.get("axis"))
+        if not before_utterance or not after_utterance or not axis:
+            continue
+        changes.append(
+            {
+                "review": review,
+                "axis": axis,
+                "before": {"stance": before, "utterance": before_utterance},
+                "after": {"stance": after, "utterance": after_utterance},
+            }
+        )
+    changes.sort(key=lambda change: change["after"]["utterance"].spoken_at, reverse=True)
+    return changes
+
+
+def build_site(
+    people: list[Person],
+    utterances: list[Utterance],
+    out_dir: str | Path,
+    *,
+    stances: list[Stance] | None = None,
+    stance_axes: list[StanceAxis] | None = None,
+    reviews: list[ReviewItem] | None = None,
+) -> BuildStats:
     out = Path(out_dir)
     (out / "person").mkdir(parents=True, exist_ok=True)
     env = _env()
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stances = stances or []
+    stance_axes = stance_axes or []
+    reviews = reviews or []
 
     by_person: dict[str, list[Utterance]] = defaultdict(list)
     unmatched = 0
@@ -179,6 +272,12 @@ def build_site(people: list[Person], utterances: list[Utterance], out_dir: str |
             groups=_timeline_groups(person_utts),
             utterance_count=len(person_utts),
             topic_labels=TOPIC_LABELS,
+            stance_histories=_stance_histories(
+                person.person_id, stances, person_utts, stance_axes
+            ),
+            stance_changes=_approved_stance_changes(
+                person.person_id, reviews, stances, utterances, stance_axes
+            ),
             generated_at=generated_at,
         )
         (out / "person" / f"{person.person_id}.html").write_text(html, encoding="utf-8")
