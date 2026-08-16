@@ -16,6 +16,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from ..analytics.ai_mentions import build_ai_analysis
 from ..enrich.topics import TOPIC_LABELS
 from ..enrich.stances import StanceAxis, select_best_stances
 from ..audit import build_balance_report
@@ -50,12 +51,14 @@ _MAX_SEARCH_INDEX_BYTES = 5 * 1024 * 1024
 
 
 def _env() -> Environment:
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
         autoescape=select_autoescape(["html"]),
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    env.filters["comma"] = lambda value: f"{int(value):,}"
+    return env
 
 
 def _timeline_groups(utterances: list[Utterance]) -> list[dict]:
@@ -675,6 +678,15 @@ def build_site(
         generated_at=generated_at,
     )
     (out / "methodology.html").write_text(methodology_html, encoding="utf-8")
+
+    analysis_dir = out / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    ai_html = env.get_template("ai_analysis.html").render(
+        root="../",
+        analysis=build_ai_analysis(people, utterances),
+        generated_at=generated_at,
+    )
+    (analysis_dir / "ai.html").write_text(ai_html, encoding="utf-8")
 
     search_shards = _write_search_shards(out, people, utterances)
     search_html = env.get_template("search.html").render(

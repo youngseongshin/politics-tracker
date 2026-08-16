@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}발언록{% endblock %}</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <style>
   /* 타이포그래피는 KRDS(정부 디자인 시스템) 램프를, 위계 표현은 테두리가 아닌
@@ -127,6 +128,58 @@
   .correction-record h2 { margin-top: 0.25rem; }
   .correction-meta { color: var(--sub); }
 
+  /* AI 언급 분석: 주제 비교와 월별 추이는 0 기준 HTML 막대로 표시한다 */
+  .ai-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+             gap: 1px; background: var(--line); margin: 1.15rem 0 1rem; }
+  .ai-kpis > div { background: var(--tint); padding: 0.85rem; }
+  .ai-kpis strong, .ai-kpis span { display: block; }
+  .ai-kpis strong { font-size: 1.12rem; }
+  .ai-kpis span { color: var(--muted); font-size: 0.92rem; }
+  .ai-topic-chart { margin: 1rem 0 1.8rem; border-bottom: 1px solid var(--line); }
+  .ai-topic-row { display: grid; grid-template-columns: minmax(10rem, 1.2fr) minmax(8rem, 2fr) 6.5rem;
+                  align-items: center; gap: 0.8rem; width: 100%; padding: 0.75rem 0.35rem;
+                  border: 0; border-top: 1px solid var(--line); background: var(--bg);
+                  color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+  .ai-topic-row:first-child { border-top-color: var(--line-strong); }
+  .ai-topic-row:hover, .ai-topic-row[aria-pressed="true"] { background: var(--tint); }
+  .ai-topic-label strong, .ai-topic-label small { display: block; }
+  .ai-topic-label small { color: var(--muted); font-size: 0.92rem; font-weight: 400; }
+  .ai-bar-track { height: 0.72rem; overflow: hidden; border-radius: 999px; background: #edf0f3; }
+  .ai-bar-fill { display: block; height: 100%; background: var(--accent); }
+  .ai-topic-value { color: var(--sub); text-align: right; font-size: 0.94rem; }
+  .ai-month-scroll { overflow-x: auto; margin: 1rem 0 1.7rem; }
+  .ai-month-chart { display: grid;
+                    grid-template-columns: repeat(var(--month-count), minmax(2.5rem, 1fr));
+                    min-width: calc(var(--month-count) * 2.7rem); gap: 0.2rem; }
+  .ai-month-item { min-width: 0; padding: 0; border: 0; background: var(--bg);
+                   color: var(--ink); font: inherit; cursor: pointer; }
+  .ai-month-item:hover, .ai-month-item[aria-pressed="true"] { background: var(--tint); }
+  .ai-month-count, .ai-month-label { display: block; text-align: center; font-size: 0.92rem; }
+  .ai-month-count { color: var(--sub); }
+  .ai-month-label { color: var(--muted); padding: 0.3rem 0 0.45rem; }
+  .ai-month-plot { display: flex; align-items: flex-end; height: 9rem; margin: 0 0.35rem;
+                   border-bottom: 1px solid var(--line-strong); }
+  .ai-month-fill { display: block; width: 100%; min-height: 0; background: var(--accent); }
+  .ai-filter-summary { display: flex; align-items: center; justify-content: space-between;
+                       gap: 1rem; margin: -0.75rem 0 1rem; color: var(--sub); }
+  .ai-mention { padding: 1.1rem 0 1.25rem; border-top: 1px solid var(--line); }
+  .ai-mention:first-of-type { border-top-color: var(--line-strong); }
+  .ai-mention-meta { color: var(--sub); font-size: 0.94rem; }
+  .ai-mention-meta a { color: var(--sub); text-decoration: underline;
+                       text-underline-offset: 2px; }
+  .ai-contexts { margin: 0.4rem 0 0; }
+  .ai-context-chip, .ai-term-chip, .ai-unmatched { display: inline-block; border-radius: 6px;
+                                                   padding: 0.05rem 0.48rem; margin: 0 0.28rem 0.25rem 0;
+                                                   font-size: 0.92rem; }
+  .ai-context-chip { color: var(--accent); background: var(--accent-tint); }
+  .ai-term-chip { color: var(--sub); background: var(--tint); }
+  .ai-unmatched { color: var(--sub); background: var(--tint); }
+  .ai-date-table { min-width: 620px; }
+  .ai-date-table td:first-child { white-space: nowrap; }
+  .ai-context-excerpts .speech + .speech { margin-top: 0.8rem; padding-top: 0.8rem;
+                                           border-top: 1px solid var(--line); }
+  .ai-timeline-group[hidden] { display: none; }
+
   /* 발언 타임라인: 날짜 아래 발언을 여백과 구분선으로 나눈다 */
   .day { margin: 2.4rem 0 0; padding-top: 1.1rem; border-top: 1px solid var(--line-strong);
          font-weight: 700; font-size: 1.02rem; }
@@ -169,6 +222,10 @@
     header.site nav a { margin-left: 0; }
     .change-pair { grid-template-columns: 1fr; }
     .status-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ai-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ai-topic-row { grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.8rem; }
+    .ai-topic-row .ai-bar-track { grid-column: 1 / -1; grid-row: 2; }
+    .ai-topic-value { grid-column: 2; grid-row: 1; }
   }
 </style>
 </head>
@@ -176,7 +233,7 @@
 <header class="site">
   <div class="shell">
     <a class="brand" href="{{ root }}index.html">발언록</a>
-    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}index.html#topics">주제</a><a href="{{ root }}search.html">검색</a><a href="{{ root }}methodology.html">방법론</a><a href="{{ root }}corrections.html">정정</a><a href="{{ root }}about.html">소개</a></nav>
+    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}index.html#topics">주제</a><a href="{{ root }}search.html">검색</a><a href="{{ root }}analysis/ai.html">AI</a><a href="{{ root }}methodology.html">방법론</a><a href="{{ root }}corrections.html">정정</a><a href="{{ root }}about.html">소개</a></nav>
   </div>
 </header>
 <main>

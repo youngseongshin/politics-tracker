@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}AI 언급 분석 · 발언록{% endblock %}
+{% block content %}
+<h1>AI 언급 분석</h1>
+<p class="lead">수집된 국회 발언 전체에서 인공지능을 직접 언급한 내용을 찾아
+주제별 분포와 시간 흐름, 근거 발언을 함께 표시합니다.</p>
+
+{% if analysis.total %}
+<div class="ai-kpis" aria-label="AI 언급 분석 요약">
+  <div><strong class="num">{{ analysis.total | comma }}건</strong><span>AI 언급 발언</span></div>
+  <div><strong class="num">{{ analysis.speaker_count | comma }}명</strong><span>서로 다른 화자 표기</span></div>
+  <div><strong class="num">{{ analysis.source_count | comma }}건</strong><span>회의록 원문</span></div>
+  <div><strong class="num">{{ analysis.unmatched | comma }}건</strong><span>인물 미귀속</span></div>
+</div>
+<p class="muted"><span class="num">{{ analysis.total_corpus | comma }}</span>개 발언을
+전수 확인했습니다. 분석 기간은 <span class="num">{{ analysis.first_date }}</span>부터
+<span class="num">{{ analysis.last_date }}</span>까지입니다.</p>
+
+<h2>주제별 언급</h2>
+<p class="muted">한 발언에 정책 맥락을 최대 3개까지 붙였습니다. 따라서 주제별 건수의
+합은 전체 발언 수보다 클 수 있습니다. 막대를 누르면 아래 근거 목록이 필터링됩니다.</p>
+<div class="ai-topic-chart" aria-label="AI 언급의 정책 주제별 발언 수">
+{% for topic in analysis.topics %}
+  <button type="button" class="ai-topic-row" data-ai-topic-filter="{{ topic.key }}"
+          aria-pressed="false" aria-label="{{ topic.label }} {{ topic.count }}건, 전체의 {{ topic.share }}퍼센트">
+    <span class="ai-topic-label"><strong>{{ topic.label }}</strong><small>{{ topic.description }}</small></span>
+    <span class="ai-bar-track" aria-hidden="true"><span class="ai-bar-fill" style="width: {{ topic.bar_width }}%"></span></span>
+    <span class="ai-topic-value num">{{ topic.count | comma }}건 · {{ topic.share }}%</span>
+  </button>
+{% endfor %}
+</div>
+
+<h2>월별 언급량</h2>
+<p class="muted">월별 발언 수를 0부터 비교합니다. 가장 높은 달을 100% 높이로 두었으며
+각 막대 위 숫자가 실제 발언 수입니다. 막대를 누르면 해당 월의 근거만 표시합니다.</p>
+<div class="ai-month-scroll">
+  <div class="ai-month-chart" style="--month-count: {{ analysis.months | length }}"
+       aria-label="월별 AI 언급 발언 수">
+  {% for month in analysis.months %}
+    <button type="button" class="ai-month-item" data-ai-month-filter="{{ month.key }}"
+            aria-pressed="false" aria-label="{{ month.label }} {{ month.count }}건">
+      <span class="ai-month-count num">{{ month.count | comma }}</span>
+      <span class="ai-month-plot" aria-hidden="true"><span class="ai-month-fill" style="height: {{ month.height }}%"></span></span>
+      <span class="ai-month-label">{{ month.short_label }}</span>
+    </button>
+  {% endfor %}
+  </div>
+</div>
+
+<h2>언급이 집중된 날짜</h2>
+<p class="muted">하루 단위 발언 수가 많은 날짜와 그날 가장 많은 AI 언급이 나온 회의입니다.</p>
+<div class="table-scroll">
+<table class="ai-date-table">
+  <thead><tr><th>날짜</th><th class="num">발언</th><th>주요 회의</th></tr></thead>
+  <tbody>
+  {% for day in analysis.top_dates %}
+    <tr><td class="num">{{ day.spoken_at }}</td><td class="num">{{ day.count | comma }}</td><td>{{ day.source_title }}{% if day.source_count != day.count %} <span class="muted num">· {{ day.source_count }}건</span>{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>분류 범위</h2>
+<p>AI, 인공지능, 에이아이, OpenAI, ChatGPT, LLM, 머신러닝·딥러닝, 딥페이크처럼 인공지능을 직접
+가리키는 표현을 포함합니다. 조류인플루엔자를 뜻하는 AI 문맥은
+<span class="num">{{ analysis.excluded_avian | comma }}</span>건 제외했습니다.</p>
+<p class="muted">표현별 발언 수:
+{% for term in analysis.terms %}<span class="ai-term-chip">{{ term.label }} <span class="num">{{ term.count | comma }}</span></span>{% endfor %}
+</p>
+
+<h2 id="ai-evidence">전체 근거 발언</h2>
+<p class="muted">최신순으로 모든 탐지 건을 한 번씩 표시합니다. 집계와 주제 분류는 발언 전문을
+사용하고, 목록에는 모든 AI 표현 주변 문맥을 실었습니다. 이름이 확정된 발언은 인물 페이지의
+전체 발언으로, 미귀속 발언은 국회 회의록 원문으로 연결합니다.</p>
+<input type="search" id="ai-query" placeholder="표시된 문맥, 화자, 회의명 검색" autocomplete="off"
+       aria-label="AI 언급 근거 검색">
+<div class="ai-filter-summary">
+  <span id="ai-filter-status" aria-live="polite">전체 <span class="num">{{ analysis.total | comma }}</span>건</span>
+  <button type="button" id="ai-filter-reset" class="text-button" hidden>필터 초기화</button>
+</div>
+<p id="ai-empty" class="notice" hidden>조건에 맞는 발언이 없습니다.</p>
+
+<div id="ai-evidence-list">
+{% for group in analysis.timeline %}
+  <section class="ai-timeline-group" data-ai-month-group="{{ group.key }}">
+    <h3 class="day">{{ group.label }} <span class="session num">{{ group.rows | length }}건</span></h3>
+  {% for row in group.rows %}
+    <article class="ai-mention" id="ai-{{ row.utterance.utterance_id }}"
+             data-ai-topics="{{ row.topic_keys }}" data-ai-month="{{ row.month }}">
+      <div class="ai-mention-meta">
+      {% if row.person %}
+        <a href="../person/{{ row.person.person_id }}.html#{{ row.utterance.utterance_id }}">{{ row.speaker_name }} · <span class="num">{{ row.utterance.spoken_at }}</span></a>
+      {% else %}
+        <span>{{ row.speaker_name }}{% if row.speaker_role %} · {{ row.speaker_role }}{% endif %} · <span class="num">{{ row.utterance.spoken_at }}</span></span>
+        <span class="ai-unmatched">인물 미귀속</span>
+      {% endif %}
+      {% if row.utterance.venue.committee %} · {{ row.utterance.venue.committee }}{% endif %}
+      </div>
+      <div class="ai-contexts">
+      {% for topic in row.topics %}<span class="ai-context-chip">{{ topic.label }}</span>{% endfor %}
+      {% for term in row.terms %}<span class="ai-term-chip">{{ term }}</span>{% endfor %}
+      </div>
+      <div class="ai-context-excerpts">
+      {% for context in row.contexts %}<p class="speech">{{ context }}</p>{% endfor %}
+      </div>
+      <div class="srcline">출처: <a href="{{ row.utterance.source.url }}" rel="noopener">{{ row.utterance.source.title or "회의록 원문" }}</a>{% if row.person %} · <a href="../person/{{ row.person.person_id }}.html#{{ row.utterance.utterance_id }}">발언 고유 링크</a>{% endif %}</div>
+    </article>
+  {% endfor %}
+  </section>
+{% endfor %}
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var activeTopic = "";
+  var activeMonth = "";
+  var query = document.getElementById("ai-query");
+  var status = document.getElementById("ai-filter-status");
+  var reset = document.getElementById("ai-filter-reset");
+  var empty = document.getElementById("ai-empty");
+  var evidence = document.getElementById("ai-evidence");
+  var items = Array.from(document.querySelectorAll(".ai-mention"));
+  var groups = Array.from(document.querySelectorAll(".ai-timeline-group"));
+  var topicButtons = Array.from(document.querySelectorAll("[data-ai-topic-filter]"));
+  var monthButtons = Array.from(document.querySelectorAll("[data-ai-month-filter]"));
+
+  function update() {
+    var term = query.value.trim().toLocaleLowerCase("ko");
+    var visible = 0;
+    items.forEach(function (item) {
+      var topics = item.dataset.aiTopics.split(" ");
+      var topicMatch = !activeTopic || topics.includes(activeTopic);
+      var monthMatch = !activeMonth || item.dataset.aiMonth === activeMonth;
+      var textMatch = !term || item.textContent.toLocaleLowerCase("ko").includes(term);
+      var show = topicMatch && monthMatch && textMatch;
+      item.hidden = !show;
+      if (show) visible += 1;
+    });
+    groups.forEach(function (group) {
+      group.hidden = !group.querySelector(".ai-mention:not([hidden])");
+    });
+    topicButtons.forEach(function (button) {
+      button.setAttribute("aria-pressed", String(button.dataset.aiTopicFilter === activeTopic));
+    });
+    monthButtons.forEach(function (button) {
+      button.setAttribute("aria-pressed", String(button.dataset.aiMonthFilter === activeMonth));
+    });
+    var labels = [];
+    if (activeTopic) labels.push("주제 필터");
+    if (activeMonth) labels.push(activeMonth);
+    if (term) labels.push("검색어 “" + query.value.trim() + "”");
+    status.textContent = (labels.length ? labels.join(" · ") + " · " : "전체 ") +
+      visible.toLocaleString("ko-KR") + "건";
+    reset.hidden = !activeTopic && !activeMonth && !term;
+    empty.hidden = visible !== 0;
+  }
+
+  function showEvidence() {
+    evidence.scrollIntoView({behavior: "smooth", block: "start"});
+  }
+
+  topicButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      activeTopic = activeTopic === button.dataset.aiTopicFilter ? "" : button.dataset.aiTopicFilter;
+      update();
+      showEvidence();
+    });
+  });
+  monthButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      activeMonth = activeMonth === button.dataset.aiMonthFilter ? "" : button.dataset.aiMonthFilter;
+      update();
+      showEvidence();
+    });
+  });
+  query.addEventListener("input", update);
+  reset.addEventListener("click", function () {
+    activeTopic = "";
+    activeMonth = "";
+    query.value = "";
+    update();
+  });
+}());
+</script>
+{% else %}
+<p class="notice">현재 수집된 발언에는 인공지능을 직접 언급한 내용이 없습니다.</p>
+{% endif %}
+{% endblock %}
