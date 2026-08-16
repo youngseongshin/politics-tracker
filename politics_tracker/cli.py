@@ -11,6 +11,7 @@ verify-api는 실제 API 키로 연결·필드매핑을 점검한다 (로컬에�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -21,6 +22,11 @@ from .enrich.topics import classify_rules
 from .matching import match_utterances
 from .models import Person
 from .site.build import build_site
+from .sources.assembly_api import (
+    DEFAULT_COMMITTEE_MINUTES_SERVICE_ID,
+    DEFAULT_MEMBER_SERVICE_ID,
+    DEFAULT_PLENARY_MINUTES_SERVICE_ID,
+)
 from .sources.minutes_parser import parse_minutes_text, speeches_to_utterances
 from .storage import Store
 
@@ -73,8 +79,8 @@ def cmd_fetch_members(args: argparse.Namespace) -> int:
 
     api = AssemblyOpenAPI(api_key=args.key)
     filters = {}
-    if args.era:
-        # 대수 필터의 파라미터명도 데이터셋마다 다르다 (예: DAESU, ERACO). 포털 명세 확인.
+    if args.era and args.era_param:
+        # 현역 명부 기본 서비스는 필터가 없다. 역대 명부 등 커스텀 서비스에서만 지정한다.
         filters[args.era_param] = args.era
 
     rows = list(api.rows(args.service_id, **filters))
@@ -114,13 +120,34 @@ def cmd_parse_minutes(args: argparse.Namespace) -> int:
 
 def cmd_fetch_minutes(args: argparse.Namespace) -> int:
     from .sources.assembly_api import AssemblyOpenAPI
-    from .sources.minutes_catalog import download_document, extract_text, normalize_minutes_row
+    from .sources.minutes_catalog import (
+        document_suffix,
+        download_document,
+        extract_speeches,
+        normalize_minutes_row,
+    )
 
     api = AssemblyOpenAPI(api_key=args.key)
+    service_id = args.service_id or (
+        DEFAULT_COMMITTEE_MINUTES_SERVICE_ID
+        if args.venue_type == "assembly_committee"
+        else DEFAULT_PLENARY_MINUTES_SERVICE_ID
+    )
     filters = dict(kv.split("=", 1) for kv in (args.filter or []))
+    if service_id in {DEFAULT_PLENARY_MINUTES_SERVICE_ID, DEFAULT_COMMITTEE_MINUTES_SERVICE_ID}:
+        filters.setdefault("DAE_NUM", args.era)
+        filters.setdefault("CONF_DATE", args.year)
+
     records = []
-    for row in api.rows(args.service_id, **filters):
-        records.append(normalize_minutes_row(row))
+    seen: set[str] = set()
+    for row in api.rows(service_id, **filters):
+        record = normalize_minutes_row(row)
+        record_key = record.meeting_id or record.doc_url
+        if record_key and record_key in seen:
+            continue
+        if record_key:
+            seen.add(record_key)
+        records.append(record)
         if args.limit and len(records) >= args.limit:
             break
 
@@ -148,26 +175,34 @@ def cmd_fetch_minutes(args: argparse.Namespace) -> int:
             skipped += 1
             continue
 
-        snapshot = snapshot_dir / f"{r.date}_{abs(hash(r.doc_url)) % 10**8:08d}.bin"
+        digest = hashlib.sha256(r.doc_url.encode("utf-8")).hexdigest()[:12]
+        snapshot = snapshot_dir / f"{r.date}_{digest}{document_suffix(content)}"
         snapshot.write_bytes(content)
 
-        speeches = parse_minutes_text(extract_text(content))
+        speeches = extract_speeches(content)
         if not speeches:
             print(f"발언 마커 없음, 건너뜀: {r.title} ({r.doc_url})", file=sys.stderr)
             skipped += 1
             continue
 
+        venue = {"type": args.venue_type, "session": r.title or ""}
+        if r.committee:
+            venue["committee"] = r.committee
+        source = {
+            "kind": "assembly_minutes",
+            "url": r.doc_url,
+            "title": r.title,
+            "retrieved_at": _now_iso(),
+            "archived_snapshot": str(snapshot),
+        }
+        if r.pdf_url:
+            source["pdf_url"] = r.pdf_url
+
         utterances = speeches_to_utterances(
             speeches,
             spoken_at=r.date,
-            venue={"type": args.venue_type, "session": r.title or ""},
-            source={
-                "kind": "assembly_minutes",
-                "url": r.doc_url,
-                "title": r.title,
-                "retrieved_at": _now_iso(),
-                "archived_snapshot": str(snapshot),
-            },
+            venue=venue,
+            source=source,
         )
         match_utterances(utterances, people)
         added = store.upsert_utterances(utterances)
@@ -237,14 +272,31 @@ def cmd_verify_api(args: argparse.Namespace) -> int:
         print("  → sources/assembly_api.py의 normalize_member 후보 키 목록에 추가하세요.")
 
     print("[3/3] 전체 수집 카운트...")
-    filters = {args.era_param: args.era} if args.era else {}
-    total = sum(1 for _ in api.rows(args.service_id, **filters))
+    filters = {args.era_param: args.era} if args.era and args.era_param else {}
+    all_rows = list(api.rows(args.service_id, **filters))
+    total = len(all_rows)
     print(f"  총 {total}명 (필터: {filters or '없음'})")
-    if args.era and not 250 <= total <= 350:
-        print("  → 현역 의원 수(~300명)와 다릅니다. 대수 필터 파라미터명(--era-param)이나 서비스 ID를 확인하세요.")
+    count_ok = not args.era or 295 <= total <= 305
+    if args.era and not args.era_param:
+        print("  현역 명부 서비스는 대수 필터 없이 현재 재직 의원만 반환합니다.")
+    if not count_ok:
+        print("  → 현역 의원 수(295~305명)와 다릅니다. 서비스 ID 또는 필터를 확인하세요.")
 
-    print("\n검증 완료." if not misses else "\n검증 완료 (필드 매핑 보완 필요).")
-    return 0
+    era_ok = True
+    if args.era:
+        normalized_members = [normalize_member(row) for row in all_rows]
+        mismatched = [
+            member.name
+            for member in normalized_members
+            if args.era not in (member.era or "")
+        ]
+        era_ok = not mismatched
+        if mismatched:
+            print(f"  → 대수 표기가 다른 레코드 {len(mismatched)}건 (예: {mismatched[:3]})")
+
+    passed = not misses and count_ok and era_ok
+    print("\n검증 완료." if passed else "\n검증 실패 (위 항목 보완 필요).")
+    return 0 if passed else 1
 
 
 def cmd_build_site(args: argparse.Namespace) -> int:
@@ -273,10 +325,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     f = sub.add_parser("fetch-members", help="열린국회정보 API에서 의원 명부 수집")
     f.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")
-    f.add_argument("--service-id", default="ALLNAMEMBER",
-                   help="열린국회정보 서비스 ID (포털에서 확인, 기본 ALLNAMEMBER=역대 의원 인적사항)")
+    f.add_argument("--service-id", default=DEFAULT_MEMBER_SERVICE_ID,
+                   help=f"열린국회정보 서비스 ID (기본 {DEFAULT_MEMBER_SERVICE_ID}=현역 의원 인적사항)")
     f.add_argument("--era", default=None, help="대수 필터 값 (예: 22)")
-    f.add_argument("--era-param", default="DAESU", help="대수 필터의 API 파라미터명")
+    f.add_argument("--era-param", default=None,
+                   help="커스텀 명부 서비스의 대수 필터 파라미터명 (현역 기본 서비스는 불필요)")
     f.add_argument("--raw-out", default="data/raw/members.json")
     f.add_argument("--store", default="data/store")
     f.set_defaults(func=cmd_fetch_members)
@@ -292,9 +345,12 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(func=cmd_parse_minutes)
 
     fm = sub.add_parser("fetch-minutes", help="회의록 목록 조회 → 원문 다운로드 → 발언 추출 → 저장소 병합")
-    fm.add_argument("--service-id", required=True,
-                    help="회의록 목록 데이터셋의 서비스 ID (열린국회정보 포털에서 확인)")
+    fm.add_argument("--service-id", default=None,
+                    help="회의록 목록 서비스 ID (기본: venue-type에 따라 본회의/위원회 공식 서비스)")
     fm.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")
+    fm.add_argument("--era", default="22", help="국회 대수 (기본: 22)")
+    fm.add_argument("--year", default=str(datetime.now(timezone.utc).year),
+                    help="회의 연도 또는 날짜 검색어 (기본: 현재 연도)")
     fm.add_argument("--filter", action="append", metavar="KEY=VALUE",
                     help="API 필터 (반복 가능, 예: --filter DAE_NUM=22)")
     fm.add_argument("--limit", type=int, default=None, help="처리할 최대 회의록 수")
@@ -317,9 +373,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")
-    v.add_argument("--service-id", default="ALLNAMEMBER")
+    v.add_argument("--service-id", default=DEFAULT_MEMBER_SERVICE_ID)
     v.add_argument("--era", default=None, help="대수 필터 값 (예: 22) — 지정 시 전체 카운트 검증")
-    v.add_argument("--era-param", default="DAESU")
+    v.add_argument("--era-param", default=None,
+                   help="커스텀 명부 서비스의 대수 필터 파라미터명")
     v.set_defaults(func=cmd_verify_api)
 
     b = sub.add_parser("build-site", help="저장소 데이터로 정적 사이트 생성")

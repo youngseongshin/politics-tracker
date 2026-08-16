@@ -18,13 +18,13 @@
 | 명령 | 내용 | 상태 |
 |---|---|---|
 | `politics-tracker quickstart` | 가상 샘플로 수집, 파싱, 매칭, 주제분류, 사이트 생성 전체 루프 | 동작 |
-| `politics-tracker verify-api` | 실 API 접속, 서비스 ID, 필드 매핑 검증 | 코드 완성, 실 API 미검증 |
-| `politics-tracker fetch-members` | 의원 명부 수집 | 코드 완성, 실 API 미검증 |
-| `politics-tracker fetch-minutes` | 회의록 목록 조회, 원문 다운로드, 발언 추출, 병합 | 코드 완성, 실 API 미검증 |
+| `politics-tracker verify-api` | 실 API 접속, 서비스 ID, 필드 매핑 검증 | 현역 299명 실 API 검증 완료 |
+| `politics-tracker fetch-members` | 의원 명부 수집 | 제22대 현역 299명 실 API 검증 완료 |
+| `politics-tracker fetch-minutes` | 회의록 목록 조회, 원문 다운로드, 발언 추출, 병합 | 본회의 5건·발언 242건 실 API 검증 완료 |
 | `politics-tracker parse-minutes` | 텍스트 파일에서 발언 추출 | 동작 |
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
-| `pytest` | 테스트 26건 | 전부 통과 |
+| `pytest` | 테스트 34건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -35,22 +35,23 @@ politics_tracker/
 ├── matching.py            화자 매칭. 동명이인은 person_id를 붙이지 않고 보류
 ├── sources/
 │   ├── minutes_parser.py  회의록 발언자 마커(◯·○·〇) 규칙 파싱
-│   ├── minutes_catalog.py 회의록 목록 정규화, 원문 다운로드, PDF/CP949 텍스트 추출
+│   ├── minutes_catalog.py 회의록 목록 정규화, 구조화 HTML 파싱, PDF/텍스트 폴백
 │   └── assembly_api.py    열린국회정보 API 클라이언트, normalize_member
 ├── enrich/topics.py       주제 14종, rules/claude 분류, 저신뢰 보류
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     26건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     34건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
 
-- 열린국회정보의 실제 서비스 ID와 필드명. `ALLNAMEMBER` 등 기본값은 추정치다.
-  M1의 첫 작업이 이 확정이다. Sol의 실행 환경(사용자 로컬)은 국회 도메인 접근이
-  가능하므로 Sol이 직접 검증한다.
 - claude 백엔드의 실 호출. `ANTHROPIC_API_KEY`가 있는 환경에서 첫 실행 시
   소량(1배치)으로 시작한다.
+
+열린국회정보 실측값은 `docs/api-notes.md`가 정본이다. 현역 의원은
+`nwvrqwxyaytdsfvhu`, 본회의 회의록은 `nzbyfwhwaoanttzje`, 위원회 회의록은
+`ncwgseseafwbuheph`로 2026-08-16에 확인했다.
 
 ### 0.4 불변 원칙 (위반하는 코드는 반려된다)
 
@@ -287,6 +288,9 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
   `normalize_member`, `normalize_minutes_row`, CLI 기본값을 실측값으로 보강한다.
   수용 기준: verify-api 3단계 통과, `fetch-members --era 22` 결과 295~305명,
   본회의 회의록 최소 5건이 `fetch-minutes`로 수집·파싱된다.
+  **완료(2026-08-16):** 현역 299명, 본회의 5건·발언 242건을 확인했다. 같은 입력을
+  재실행했을 때 신규 발언 0건이었다. PDF 공백 소실을 피하기 위해 공식 회의록
+  뷰어의 구조화 HTML 화자 메타데이터를 우선 사용하고 PDF/텍스트는 폴백으로 유지한다.
 - T1.2 상임위 회의록: `fetch-minutes --venue-type assembly_committee` 경로 정비.
   회의록 제목에서 위원회명을 추출해 `venue.committee`에 넣는다(정규식:
   "…위원회회의록" 패턴, 실측 후 확정). 사이트 타임라인의 회의명 옆에 위원회명을 표시한다.

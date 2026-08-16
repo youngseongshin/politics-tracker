@@ -29,8 +29,7 @@ politics-tracker quickstart --out ./quickstart_out
 ## 실데이터 연결
 
 1. [열린국회정보](https://open.assembly.go.kr)에서 무료 API 키 발급 → `ASSEMBLY_API_KEY` 환경변수로 설정
-2. 포털의 Open API 목록에서 사용할 데이터셋의 **서비스 ID**를 확인
-   (데이터셋마다 ID·필드명이 다릅니다. 기본값 `ALLNAMEMBER`(역대 의원 인적사항)는 확인 후 사용하세요)
+2. 검증된 기본 서비스 ID와 필드는 [docs/api-notes.md](docs/api-notes.md)에서 확인
 
 ```bash
 # 0. 연결·서비스ID·필드매핑 검증 (가장 먼저 실행 — 아래 "검증" 절 참고)
@@ -39,10 +38,13 @@ politics-tracker verify-api --era 22
 # 1. 의원 명부 수집 (22대)
 politics-tracker fetch-members --era 22
 
-# 2-a. 회의록 자동 수집: 목록 조회 → 원문 다운로드 → 발언 추출 → 병합
-#      (서비스 ID는 포털에서 확인. --list-only로 필드부터 확인 권장)
-politics-tracker fetch-minutes --service-id <회의록목록_서비스ID> --list-only --limit 5
-politics-tracker fetch-minutes --service-id <회의록목록_서비스ID> --limit 10
+# 2-a. 본회의 회의록 자동 수집: 목록 조회 → 구조화 원문 다운로드 → 발언 추출 → 병합
+politics-tracker fetch-minutes --era 22 --year 2026 --list-only --limit 5
+politics-tracker fetch-minutes --era 22 --year 2026 --limit 10
+
+# 위원회 회의록은 venue-type만 바꾸면 검증된 위원회 서비스 ID를 사용
+politics-tracker fetch-minutes --venue-type assembly_committee \
+  --era 22 --year 2026 --list-only --limit 5
 
 # 2-b. 또는 수동: 내려받은 텍스트 파일에서 발언 추출
 politics-tracker parse-minutes ./minutes/2026-07-15-plenary.txt \
@@ -59,18 +61,19 @@ politics-tracker classify-topics --backend claude
 politics-tracker build-site --out ./site_out
 ```
 
-`fetch-minutes`는 다운로드한 원문을 `data/raw/minutes/`에 스냅샷으로 보관하고
-발언의 `source.archived_snapshot`에 경로를 기록합니다 (링크 부패 대비).
+`fetch-minutes`는 국회회의록시스템의 구조화 HTML에서 서버가 표시한 화자·직함·발언을
+읽습니다. 구조화 HTML이 없는 과거 문서는 PDF/텍스트 규칙 파서로 폴백합니다.
+다운로드한 원문은 `data/raw/minutes/`에 스냅샷으로 보관하고 발언의
+`source.archived_snapshot`에 경로를 기록합니다 (링크 부패 대비).
 
 ### 검증 (verify-api)
 
 `verify-api`는 ① API 접속/인증 ② `normalize_member` 필드 매핑 커버리지
-③ 대수 필터 카운트(현역 ~300명)를 순서대로 점검하고, 실패 시 무엇을 고쳐야
-하는지(서비스 ID, 필드 후보 키, 필터 파라미터명)를 출력합니다.
+③ 현역 총원(295~305명)과 대수 표기를 순서대로 점검합니다. 현역 의원 기본 서비스는
+대수 필터 없이 현재 재직 의원만 반환합니다.
 
-> **주의**: 개발에 쓰는 원격 샌드박스는 국회 도메인(open.assembly.go.kr,
-> likms.assembly.go.kr)으로의 아웃바운드가 차단되어 있습니다. `verify-api`와
-> 실데이터 수집 명령은 **로컬 머신에서** 실행하세요.
+GitHub Actions에서 수집할 때는 저장소 Actions Secret에 `ASSEMBLY_API_KEY`를
+등록하고 키 값을 코드·로그·커밋에 넣지 마세요.
 
 ## 구조
 
@@ -81,7 +84,7 @@ politics_tracker/
 ├── matching.py            화자→인물 매칭 (동명이인은 확정하지 않고 보류)
 ├── sources/
 │   ├── minutes_parser.py  회의록 발언자 마커(◯) 규칙 파싱 — Phase 0의 핵심
-│   ├── minutes_catalog.py 회의록 목록 조회·원문 다운로드·텍스트 추출 (PDF/CP949)
+│   ├── minutes_catalog.py 회의록 목록 조회·구조화 HTML 파싱 (PDF/텍스트 폴백)
 │   └── assembly_api.py    열린국회정보 Open API 클라이언트
 ├── enrich/
 │   └── topics.py          주제 분류 — rules(키워드) / claude(구조화 출력, 저신뢰 보류)

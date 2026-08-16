@@ -2,8 +2,8 @@
 
 - API 키: 열린국회정보 회원가입 후 무료 발급. 환경변수 ASSEMBLY_API_KEY 권장.
 - 서비스 ID: 열린국회정보 > Open API 목록에서 데이터셋별 ID를 확인한다.
-  ID 체계가 데이터셋마다 다르므로(예: ALLNAMEMBER = 역대 국회의원 인적사항)
-  아래 기본값은 반드시 포털에서 실제 ID를 확인한 뒤 사용/교체할 것.
+  아래 기본값은 2026-08-16 실 API 응답으로 검증했다. 상세한 필드와 필터는
+  docs/api-notes.md에 기록한다.
 
 응답 형태 (성공):
   {"<SERVICE_ID>": [{"head": [{"list_total_count": N}, {"RESULT": {...}}]},
@@ -23,8 +23,12 @@ from ..models import Person
 
 DEFAULT_BASE_URL = "https://open.assembly.go.kr/portal/openapi/"
 
-# 포털에서 확인 후 교체 가능한 기본값 (역대 국회의원 인적사항)
-DEFAULT_MEMBER_SERVICE_ID = "ALLNAMEMBER"
+# 현역 국회의원 인적사항. 대수 필터 없이 현재 재직 의원만 반환한다.
+DEFAULT_MEMBER_SERVICE_ID = "nwvrqwxyaytdsfvhu"
+
+# 회의록 목록. 두 서비스 모두 DAE_NUM과 CONF_DATE가 필수 요청 인자다.
+DEFAULT_PLENARY_MINUTES_SERVICE_ID = "nzbyfwhwaoanttzje"
+DEFAULT_COMMITTEE_MINUTES_SERVICE_ID = "ncwgseseafwbuheph"
 
 # 데이터 없음을 뜻하는 결과 코드 (페이징 종료 신호)
 _NO_DATA_CODES = {"INFO-200"}
