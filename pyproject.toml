@@ -27,4 +27,4 @@ politics-tracker = "politics_tracker.cli:main"
 include = ["politics_tracker*"]
 
 [tool.setuptools.package-data]
-politics_tracker = ["samples/*", "site/templates/*"]
+politics_tracker = ["samples/*", "site/templates/*", "analytics/data/*.yaml"]

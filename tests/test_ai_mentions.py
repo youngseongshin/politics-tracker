@@ -1,7 +1,6 @@
 from politics_tracker.analytics.ai_mentions import (
     ai_mention_contexts,
     build_ai_analysis,
-    classify_ai_topics,
     is_ai_mention,
     matched_ai_terms,
 )
@@ -43,7 +42,7 @@ def test_ai_detection_excludes_avian_influenza_but_keeps_technology_context():
     assert not is_ai_mention("디지털 전환을 준비해야 합니다.")
 
 
-def test_ai_terms_and_topics_are_deterministic_and_capped():
+def test_ai_term_detection_is_deterministic():
     text = (
         "ChatGPT와 AI 데이터센터를 위한 전력망 투자, 반도체 연구개발, "
         "개인정보 보호 법안을 함께 논의합니다."
@@ -53,15 +52,6 @@ def test_ai_terms_and_topics_are_deterministic_and_capped():
         "에이아이",
         "Artificial Intelligence",
     ]
-    topics = classify_ai_topics(text)
-    assert 1 <= len(topics) <= 3
-    assert topics[0]["key"] == "infrastructure_energy"
-    assert {topic["key"] for topic in topics} == {
-        "infrastructure_energy",
-        "rights_safety",
-        "technology_research",
-    }
-    assert classify_ai_topics("AI 대전환의 방향을 논의합니다.")[0]["key"] == "general"
 
 
 def test_ai_contexts_cover_every_mention_without_rendering_unrelated_full_text():
@@ -74,7 +64,7 @@ def test_ai_contexts_cover_every_mention_without_rendering_unrelated_full_text()
     assert sum(map(len, contexts)) < len(text) // 2
 
 
-def test_build_ai_analysis_covers_unmatched_and_zero_count_months():
+def test_build_ai_analysis_defines_scope_without_automated_public_topics():
     people = [Person(person_id="p1", name="이가상", party="가상당")]
     utterances = [
         _utterance(
@@ -119,23 +109,20 @@ def test_build_ai_analysis_covers_unmatched_and_zero_count_months():
     assert analysis["excluded_avian"] == 1
     assert analysis["first_date"] == "2026-04-01"
     assert analysis["last_date"] == "2026-06-02"
-    assert [(month["key"], month["count"]) for month in analysis["months"]] == [
-        ("2026-04", 1),
-        ("2026-05", 0),
-        ("2026-06", 2),
-    ]
     assert [group["key"] for group in analysis["timeline"]] == [
         "2026-06",
         "2026-04",
     ]
     all_rows = [row for group in analysis["timeline"] for row in group["rows"]]
     assert [row["utterance"].utterance_id for row in all_rows] == ["u3", "u4", "u1"]
-    rights = next(topic for topic in analysis["topics"] if topic["key"] == "rights_safety")
-    assert rights["count"] == 1
+    assert all("topics" not in row and "topic_keys" not in row for row in all_rows)
+    assert "topics" not in analysis
+    assert "months" not in analysis
+    assert "top_dates" not in analysis
     assert analysis["source_count"] == 3
 
 
-def test_site_build_renders_ai_charts_filters_and_all_evidence(tmp_path):
+def test_site_build_renders_ai_scope_and_all_evidence_without_rule_charts(tmp_path):
     people = [Person(person_id="p1", name="이가상", party="가상당")]
     utterances = [
         _utterance(
@@ -161,13 +148,14 @@ def test_site_build_renders_ai_charts_filters_and_all_evidence(tmp_path):
     build_site(people, utterances, tmp_path)
 
     page = (tmp_path / "analysis" / "ai.html").read_text(encoding="utf-8")
-    assert "AI 언급 분석" in page
-    assert '<span class="num">3</span>개 발언을' in page
-    assert "2건" in page
-    assert 'data-ai-topic-filter="infrastructure_energy"' in page
-    assert 'data-ai-month-filter="2026-04"' in page
-    assert 'data-ai-month-filter="2026-05"' in page
-    assert 'data-ai-month-filter="2026-06"' in page
+    assert "국회가 AI를 말할 때" in page
+    assert '국회 발언 <span class="num">3</span>건 가운데' in page
+    assert 'AI를 직접 언급한 발언 <span class="num">2</span>건' in page
+    assert "현재 자료에는 정성 보고서가 인용하는 원문 근거가 모두 들어 있지 않아" in page
+    assert 'data-ai-topic-filter=' not in page
+    assert 'data-ai-month-filter=' not in page
+    assert "주제별 언급" not in page
+    assert "월별 언급량" not in page
     assert page.count('class="ai-mention"') == 2
     assert "조류독감(AI)" not in page
     assert "AI 산업 투자" in page
@@ -176,7 +164,8 @@ def test_site_build_renders_ai_charts_filters_and_all_evidence(tmp_path):
     assert "인물 미귀속" in page
     assert "https://example.invalid/minutes/u3" in page
     assert "ai-filter-reset" in page
-    assert "scrollIntoView" in page
+    assert "scrollIntoView" not in page
+    assert 'id="ai-query"' in page
 
     index = (tmp_path / "index.html").read_text(encoding="utf-8")
     assert 'href="analysis/ai.html"' in index
@@ -184,3 +173,4 @@ def test_site_build_renders_ai_charts_filters_and_all_evidence(tmp_path):
     methodology = (tmp_path / "methodology.html").read_text(encoding="utf-8")
     assert 'href="analysis/ai.html"' in methodology
     assert "조류인플루엔자 또는 조류독감의 약자인 AI" in methodology
+    assert "키워드 빈도, 자동 점수, 발언량 순위로 만들지 않습니다" in methodology

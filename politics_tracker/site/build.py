@@ -17,6 +17,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..analytics.ai_mentions import build_ai_analysis
+from ..analytics.ai_qualitative import resolve_ai_qualitative_report
 from ..enrich.topics import TOPIC_LABELS
 from ..enrich.stances import StanceAxis, select_best_stances
 from ..audit import build_balance_report
@@ -681,9 +682,11 @@ def build_site(
 
     analysis_dir = out / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
+    ai_analysis = build_ai_analysis(people, utterances)
     ai_html = env.get_template("ai_analysis.html").render(
         root="../",
-        analysis=build_ai_analysis(people, utterances),
+        analysis=ai_analysis,
+        qualitative=resolve_ai_qualitative_report(ai_analysis),
         generated_at=generated_at,
     )
     (analysis_dir / "ai.html").write_text(ai_html, encoding="utf-8")

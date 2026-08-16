@@ -128,38 +128,72 @@
   .correction-record h2 { margin-top: 0.25rem; }
   .correction-meta { color: var(--sub); }
 
-  /* AI 언급 분석: 주제 비교와 월별 추이는 0 기준 HTML 막대로 표시한다 */
-  .ai-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
-             gap: 1px; background: var(--line); margin: 1.15rem 0 1rem; }
-  .ai-kpis > div { background: var(--tint); padding: 0.85rem; }
-  .ai-kpis strong, .ai-kpis span { display: block; }
-  .ai-kpis strong { font-size: 1.12rem; }
-  .ai-kpis span { color: var(--muted); font-size: 0.92rem; }
-  .ai-topic-chart { margin: 1rem 0 1.8rem; border-bottom: 1px solid var(--line); }
-  .ai-topic-row { display: grid; grid-template-columns: minmax(10rem, 1.2fr) minmax(8rem, 2fr) 6.5rem;
-                  align-items: center; gap: 0.8rem; width: 100%; padding: 0.75rem 0.35rem;
-                  border: 0; border-top: 1px solid var(--line); background: var(--bg);
-                  color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-  .ai-topic-row:first-child { border-top-color: var(--line-strong); }
-  .ai-topic-row:hover, .ai-topic-row[aria-pressed="true"] { background: var(--tint); }
-  .ai-topic-label strong, .ai-topic-label small { display: block; }
-  .ai-topic-label small { color: var(--muted); font-size: 0.92rem; font-weight: 400; }
-  .ai-bar-track { height: 0.72rem; overflow: hidden; border-radius: 999px; background: #edf0f3; }
-  .ai-bar-fill { display: block; height: 100%; background: var(--accent); }
-  .ai-topic-value { color: var(--sub); text-align: right; font-size: 0.94rem; }
-  .ai-month-scroll { overflow-x: auto; margin: 1rem 0 1.7rem; }
-  .ai-month-chart { display: grid;
-                    grid-template-columns: repeat(var(--month-count), minmax(2.5rem, 1fr));
-                    min-width: calc(var(--month-count) * 2.7rem); gap: 0.2rem; }
-  .ai-month-item { min-width: 0; padding: 0; border: 0; background: var(--bg);
-                   color: var(--ink); font: inherit; cursor: pointer; }
-  .ai-month-item:hover, .ai-month-item[aria-pressed="true"] { background: var(--tint); }
-  .ai-month-count, .ai-month-label { display: block; text-align: center; font-size: 0.92rem; }
-  .ai-month-count { color: var(--sub); }
-  .ai-month-label { color: var(--muted); padding: 0.3rem 0 0.45rem; }
-  .ai-month-plot { display: flex; align-items: flex-end; height: 9rem; margin: 0 0.35rem;
-                   border-bottom: 1px solid var(--line-strong); }
-  .ai-month-fill { display: block; width: 100%; min-height: 0; background: var(--accent); }
+  /* AI 정성 보고서: 해석, 반론, 원문 근거를 한 흐름으로 읽는다 */
+  .section-kicker { margin: 0 0 0.35rem; color: var(--accent); font-size: 0.92rem;
+                    font-weight: 700; letter-spacing: 0.02em; }
+  .ai-thesis { margin: 2rem 0 2.4rem; padding: 1.25rem 1.35rem;
+               border-radius: 10px; background: var(--accent-tint); }
+  .ai-thesis h2 { margin: 0 0 0.65rem; font-size: 1.3rem; line-height: 1.5; }
+  .ai-thesis p:last-child { margin-bottom: 0; }
+  .ai-finding-list { list-style: none; padding: 0; margin: 0.8rem 0 2.3rem;
+                     counter-reset: ai-finding; }
+  .ai-finding-list li { position: relative; padding: 0.9rem 0 0.95rem 2.35rem;
+                        border-top: 1px solid var(--line); counter-increment: ai-finding; }
+  .ai-finding-list li:first-child { border-top-color: var(--line-strong); }
+  .ai-finding-list li::before { content: counter(ai-finding, decimal-leading-zero);
+                                position: absolute; left: 0; color: var(--accent);
+                                font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ai-report-nav { display: flex; flex-wrap: wrap; gap: 0.45rem 0.55rem;
+                   margin: 0 0 3.2rem; padding: 0.85rem 0;
+                   border-top: 1px solid var(--line-strong);
+                   border-bottom: 1px solid var(--line); }
+  .ai-report-nav a { margin: 0; padding: 0.2rem 0.55rem; border-radius: 6px;
+                     background: var(--tint); color: var(--sub); font-size: 0.94rem; }
+  #ai-chronology, #ai-themes, #ai-tensions, #ai-questions, #ai-scope, #ai-evidence {
+    scroll-margin-top: 1.2rem;
+  }
+  .ai-chronology { margin: 1.1rem 0 3.2rem; }
+  .ai-chronology article { padding: 1.15rem 0 1.25rem; border-top: 1px solid var(--line); }
+  .ai-chronology article:first-child { border-top-color: var(--line-strong); }
+  .ai-chronology h3 { margin: 0.15rem 0 0.45rem; font-size: 1.06rem; }
+  .ai-chronology ul { margin-bottom: 0; }
+  .ai-period { margin: 0; color: var(--muted); font-size: 0.92rem; }
+  .ai-theme { margin: 3.5rem 0 0; padding-top: 1.5rem;
+              border-top: 1px solid var(--line-strong); }
+  .ai-theme > h3 { margin: 0.2rem 0 0.65rem; font-size: 1.32rem; line-height: 1.48; }
+  .ai-theme-summary { color: var(--sub); font-size: 1.01rem; }
+  .ai-theme h4 { margin: 1.4rem 0 0.45rem; font-size: 0.96rem; }
+  .ai-theme-columns { display: grid; grid-template-columns: 1.15fr 0.85fr;
+                      gap: 1.5rem; margin-top: 0.9rem; }
+  .ai-theme-columns h4 { margin-top: 0; }
+  .ai-theme-columns ul { margin: 0; padding-left: 1.25rem; }
+  .ai-theme-columns li + li { margin-top: 0.45rem; }
+  .ai-interpretation { margin: 1.4rem 0 1.8rem; padding: 0.9rem 1rem;
+                       border-radius: 8px; background: var(--tint); }
+  .ai-interpretation p { margin: 0; }
+  .ai-interpretation p + p { margin-top: 0.7rem; padding-top: 0.7rem;
+                              border-top: 1px solid var(--line); }
+  .ai-evidence-heading { padding-bottom: 0.45rem; border-bottom: 1px solid var(--line-strong); }
+  .ai-evidence-item { padding: 1rem 0 1.1rem; border-bottom: 1px solid var(--line); }
+  .ai-evidence-note { margin: 0.4rem 0; }
+  .ai-source-context { margin: 0.55rem 0; color: var(--sub); }
+  .ai-source-context summary { width: fit-content; color: var(--accent); cursor: pointer;
+                               font-size: 0.92rem; }
+  .ai-source-context[open] { padding: 0.7rem 0.85rem; border-radius: 8px;
+                             background: var(--tint); }
+  .ai-source-context[open] summary { margin-bottom: 0.35rem; }
+  .ai-source-context .speech { color: var(--ink); }
+  .ai-tension-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.4rem;
+                     margin: 0.8rem 0 3.1rem; }
+  .ai-tension-list article { padding: 0.9rem 0 1rem; border-top: 1px solid var(--line); }
+  .ai-tension-list article:nth-child(-n+2) { border-top-color: var(--line-strong); }
+  .ai-tension-list h3 { margin: 0 0 0.35rem; }
+  .ai-tension-list p { margin: 0; color: var(--sub); }
+  .ai-question-list { margin: 0.9rem 0 3.1rem; padding-left: 1.35rem; }
+  .ai-question-list li { padding: 0.55rem 0 0.65rem 0.25rem; }
+  .ai-question-list li + li { border-top: 1px solid var(--line); }
+  .ai-caveats { margin: 1rem 0; color: var(--sub); }
+  .ai-caveats li + li { margin-top: 0.45rem; }
   .ai-filter-summary { display: flex; align-items: center; justify-content: space-between;
                        gap: 1rem; margin: -0.75rem 0 1rem; color: var(--sub); }
   .ai-mention { padding: 1.1rem 0 1.25rem; border-top: 1px solid var(--line); }
@@ -167,15 +201,9 @@
   .ai-mention-meta { color: var(--sub); font-size: 0.94rem; }
   .ai-mention-meta a { color: var(--sub); text-decoration: underline;
                        text-underline-offset: 2px; }
-  .ai-contexts { margin: 0.4rem 0 0; }
-  .ai-context-chip, .ai-term-chip, .ai-unmatched { display: inline-block; border-radius: 6px;
-                                                   padding: 0.05rem 0.48rem; margin: 0 0.28rem 0.25rem 0;
-                                                   font-size: 0.92rem; }
-  .ai-context-chip { color: var(--accent); background: var(--accent-tint); }
-  .ai-term-chip { color: var(--sub); background: var(--tint); }
+  .ai-unmatched { display: inline-block; border-radius: 6px;
+                  padding: 0.05rem 0.48rem; margin-left: 0.25rem; font-size: 0.92rem; }
   .ai-unmatched { color: var(--sub); background: var(--tint); }
-  .ai-date-table { min-width: 620px; }
-  .ai-date-table td:first-child { white-space: nowrap; }
   .ai-context-excerpts .speech + .speech { margin-top: 0.8rem; padding-top: 0.8rem;
                                            border-top: 1px solid var(--line); }
   .ai-timeline-group[hidden] { display: none; }
@@ -222,10 +250,9 @@
     header.site nav a { margin-left: 0; }
     .change-pair { grid-template-columns: 1fr; }
     .status-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .ai-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .ai-topic-row { grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 0.8rem; }
-    .ai-topic-row .ai-bar-track { grid-column: 1 / -1; grid-row: 2; }
-    .ai-topic-value { grid-column: 2; grid-row: 1; }
+    .ai-theme-columns, .ai-tension-list { grid-template-columns: 1fr; }
+    .ai-tension-list article:nth-child(2) { border-top-color: var(--line); }
+    .ai-thesis { padding: 1rem; }
   }
 </style>
 </head>
@@ -233,7 +260,7 @@
 <header class="site">
   <div class="shell">
     <a class="brand" href="{{ root }}index.html">발언록</a>
-    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}index.html#topics">주제</a><a href="{{ root }}search.html">검색</a><a href="{{ root }}analysis/ai.html">AI</a><a href="{{ root }}methodology.html">방법론</a><a href="{{ root }}corrections.html">정정</a><a href="{{ root }}about.html">소개</a></nav>
+    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}index.html#topics">주제</a><a href="{{ root }}search.html">검색</a><a href="{{ root }}analysis/ai.html">AI 논의</a><a href="{{ root }}methodology.html">방법론</a><a href="{{ root }}corrections.html">정정</a><a href="{{ root }}about.html">소개</a></nav>
   </div>
 </header>
 <main>
