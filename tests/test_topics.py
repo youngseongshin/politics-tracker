@@ -38,6 +38,21 @@ def test_rules_caps_at_three_topics():
     assert len(u.topics) <= 3
 
 
+def test_classifiers_preserve_human_reviewed_topics():
+    reviewed = make_utterance("u1", "부동산 발언")
+    reviewed.topics = ["economy"]
+    reviewed.topic_source = "human_reviewed"
+    reviewed.human_reviewed = True
+
+    assert classify_rules([reviewed]) == {"total": 1, "with_topics": 1}
+    assert reviewed.topics == ["economy"]
+    client = FakeClient()
+    stats = classify_claude([reviewed], client=client)
+    assert reviewed.topics == ["economy"]
+    assert stats["with_topics"] == 1
+    assert client.calls == []
+
+
 # -- claude backend (fake client, no network) ---------------------------
 
 

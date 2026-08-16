@@ -84,6 +84,9 @@ def classify_rules(utterances: list[Utterance]) -> dict[str, int]:
     """키워드 매칭으로 주제를 붙인다. 결정적이며 항상 같은 결과를 낸다."""
     classified = 0
     for utterance in utterances:
+        if utterance.human_reviewed:
+            classified += int(bool(utterance.topics))
+            continue
         hits: list[tuple[int, str]] = []
         for key, spec in TOPICS.items():
             count = sum(utterance.text.count(kw) for kw in spec["keywords"])
@@ -170,11 +173,21 @@ def classify_claude(
             raise RuntimeError("ANTHROPIC_API_KEY 환경변수가 필요합니다.")
         client = anthropic.Anthropic()
 
-    stats = {"total": len(utterances), "with_topics": 0, "held_low_confidence": 0, "held_refusal": 0}
+    stats = {
+        "total": len(utterances),
+        "with_topics": sum(
+            1
+            for utterance in utterances
+            if utterance.human_reviewed and utterance.topics
+        ),
+        "held_low_confidence": 0,
+        "held_refusal": 0,
+    }
     by_id = {u.utterance_id: u for u in utterances}
+    candidates = [utterance for utterance in utterances if not utterance.human_reviewed]
 
-    for start in range(0, len(utterances), batch_size):
-        batch = utterances[start : start + batch_size]
+    for start in range(0, len(candidates), batch_size):
+        batch = candidates[start : start + batch_size]
         system, user = _build_prompt_messages(batch)
 
         kwargs: dict[str, Any] = dict(

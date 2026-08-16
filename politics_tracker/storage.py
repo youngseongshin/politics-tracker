@@ -11,7 +11,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .models import Person, Utterance
+from .models import Person, ReviewItem, Utterance
 
 
 class Store:
@@ -22,6 +22,7 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True)
         self.people_path = self.root / "people.jsonl"
         self.utterances_path = self.root / "utterances.jsonl"
+        self.reviews_path = self.root / "reviews.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -45,6 +46,13 @@ class Store:
         merged = sorted(existing.values(), key=lambda u: (u.spoken_at, u.source.get("url", ""), u.order))
         self.save_utterances(merged)
         return added
+
+    # -- reviews --------------------------------------------------------
+    def save_reviews(self, reviews: list[ReviewItem]) -> None:
+        _write_jsonl(self.reviews_path, [review.to_dict() for review in reviews])
+
+    def load_reviews(self) -> list[ReviewItem]:
+        return [ReviewItem.from_dict(data) for data in _read_jsonl(self.reviews_path)]
 
 
 _SQLITE_SCHEMA = """
@@ -70,6 +78,21 @@ CREATE INDEX IF NOT EXISTS idx_utterances_person_spoken_at
     ON utterances(person_id, spoken_at);
 CREATE INDEX IF NOT EXISTS idx_utterances_spoken_at
     ON utterances(spoken_at);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    review_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    note TEXT,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_status_kind_created
+    ON reviews(status, kind, created_at);
 """
 
 
@@ -219,6 +242,152 @@ class SqliteStore:
             return after - before
         finally:
             conn.close()
+
+    # -- reviews --------------------------------------------------------
+    @staticmethod
+    def _review_values(review: ReviewItem) -> tuple:
+        return (
+            review.review_id,
+            review.kind,
+            review.target_id,
+            review.reason,
+            review.status,
+            review.created_at,
+            review.decided_at,
+            review.note,
+            _json(review.payload),
+        )
+
+    def save_reviews(self, reviews: list[ReviewItem]) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM reviews")
+                conn.executemany(
+                    """
+                    INSERT INTO reviews(
+                        review_id, kind, target_id, reason, status, created_at,
+                        decided_at, note, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [self._review_values(review) for review in reviews],
+                )
+        finally:
+            conn.close()
+
+    def load_reviews(
+        self,
+        *,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> list[ReviewItem]:
+        where: list[str] = []
+        values: list[str] = []
+        if kind:
+            where.append("kind = ?")
+            values.append(kind)
+        if status:
+            where.append("status = ?")
+            values.append(status)
+        sql = "SELECT * FROM reviews"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at, review_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [
+                ReviewItem(
+                    review_id=row["review_id"],
+                    kind=row["kind"],
+                    target_id=row["target_id"],
+                    payload=json.loads(row["payload_json"]),
+                    reason=row["reason"],
+                    status=row["status"],
+                    created_at=row["created_at"],
+                    decided_at=row["decided_at"],
+                    note=row["note"],
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def get_review(self, review_id: str) -> ReviewItem | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM reviews WHERE review_id = ?", (review_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            return ReviewItem(
+                review_id=row["review_id"],
+                kind=row["kind"],
+                target_id=row["target_id"],
+                payload=json.loads(row["payload_json"]),
+                reason=row["reason"],
+                status=row["status"],
+                created_at=row["created_at"],
+                decided_at=row["decided_at"],
+                note=row["note"],
+            )
+        finally:
+            conn.close()
+
+    def enqueue_review(self, review: ReviewItem) -> bool:
+        """결정적 ID가 이미 있으면 기존 생성·판정 이력을 보존한다."""
+        conn = self._connect()
+        try:
+            with conn:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO reviews(
+                        review_id, kind, target_id, reason, status, created_at,
+                        decided_at, note, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._review_values(review),
+                )
+            return cursor.rowcount == 1
+        finally:
+            conn.close()
+
+    def decide_review(
+        self,
+        review_id: str,
+        *,
+        status: str,
+        decided_at: str,
+        note: str | None = None,
+    ) -> ReviewItem:
+        if status not in {"approved", "rejected"}:
+            raise ValueError("review decision must be approved or rejected")
+        conn = self._connect()
+        try:
+            with conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE reviews
+                    SET status = ?, decided_at = ?, note = ?
+                    WHERE review_id = ? AND status = 'pending'
+                    """,
+                    (status, decided_at, note, review_id),
+                )
+                if cursor.rowcount != 1:
+                    current = conn.execute(
+                        "SELECT status FROM reviews WHERE review_id = ?", (review_id,)
+                    ).fetchone()
+                    if current is None:
+                        raise KeyError(f"review not found: {review_id}")
+                    raise ValueError(
+                        f"review decision is immutable: {review_id} is {current['status']}"
+                    )
+        finally:
+            conn.close()
+        decided = self.get_review(review_id)
+        assert decided is not None
+        return decided
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

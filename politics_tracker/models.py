@@ -54,6 +54,7 @@ class Utterance:
     person_id: str | None = None  # 화자 매칭 결과 (미확정이면 None)
     topics: list[str] = field(default_factory=list)  # 주제 키 (enrich.topics.TOPICS)
     topic_source: str | None = None  # "rules" | "llm:<model>" | "held:<사유>" — 분류 방식 공개
+    human_reviewed: bool = False
 
     def __post_init__(self) -> None:
         if not self.source or not self.source.get("url"):
@@ -76,7 +77,70 @@ class Utterance:
             person_id=d.get("person_id"),
             topics=list(d.get("topics") or []),
             topic_source=d.get("topic_source"),
+            human_reviewed=bool(d.get("human_reviewed", False)),
         )
+
+
+@dataclass
+class ReviewItem:
+    review_id: str
+    kind: str
+    target_id: str
+    payload: dict[str, Any]
+    reason: str
+    status: str
+    created_at: str
+    decided_at: str | None = None
+    note: str | None = None
+
+    def __post_init__(self) -> None:
+        allowed_kinds = {
+            "topic",
+            "stance",
+            "match",
+            "bill_link",
+            "stance_change",
+            "prediction",
+        }
+        if not self.review_id.startswith("rev_"):
+            raise ValueError("ReviewItem.review_id must start with rev_")
+        if self.kind not in allowed_kinds:
+            raise ValueError(f"Invalid review kind: {self.kind}")
+        if self.status not in {"pending", "approved", "rejected"}:
+            raise ValueError(f"Invalid review status: {self.status}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ReviewItem":
+        return cls(
+            review_id=data["review_id"],
+            kind=data["kind"],
+            target_id=data["target_id"],
+            payload=dict(data.get("payload") or {}),
+            reason=data["reason"],
+            status=data.get("status", "pending"),
+            created_at=data["created_at"],
+            decided_at=data.get("decided_at"),
+            note=data.get("note"),
+        )
+
+
+def review_id_for(kind: str, target_id: str, reason: str, payload: dict[str, Any]) -> str:
+    """같은 대상·사유·후보 payload에 대해 항상 같은 검수 ID를 만든다."""
+    canonical = repr(
+        (kind, target_id, reason, _canonical_value(payload))
+    ).encode("utf-8")
+    return "rev_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple((key, _canonical_value(value[key])) for key in sorted(value))
+    if isinstance(value, list):
+        return tuple(_canonical_value(item) for item in value)
+    return value
 
 
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:

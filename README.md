@@ -69,6 +69,18 @@ politics-tracker migrate-store --store data/store --db data/db.sqlite
 politics-tracker export-jsonl --db data/db.sqlite --out data/export
 ```
 
+Claude 분류에서 신뢰도 임계값을 넘지 못한 결과는 자동 공개하지 않고 검수 큐에
+적재합니다. 현재 큐는 다음처럼 처리합니다.
+
+```bash
+politics-tracker review list --kind topic
+politics-tracker review show rev_...
+politics-tracker review approve rev_... --edit topics=housing,economy --note "원문 대조 완료"
+politics-tracker review reject rev_... --note "근거 부족"
+```
+
+한 번 승인·기각한 검수 결정은 수정할 수 없습니다.
+
 `fetch-minutes`는 국회회의록시스템의 구조화 HTML에서 서버가 표시한 화자·직함·발언을
 읽습니다. 구조화 HTML이 없는 과거 문서는 PDF/텍스트 규칙 파서로 폴백합니다.
 다운로드한 원문은 `data/raw/minutes/`에 스냅샷으로 보관하고 발언의
@@ -87,7 +99,7 @@ GitHub Actions에서 수집할 때는 저장소 Actions Secret에 `ASSEMBLY_API_
 
 ```text
 politics_tracker/
-├── models.py              Person / Utterance — 출처 없는 발언은 생성 불가
+├── models.py              Person / Utterance / ReviewItem — 출처·검수 불변성 강제
 ├── storage.py             SQLite 운영 저장소 + JSONL 마이그레이션·교환 포맷
 ├── matching.py            화자→인물 매칭 (동명이인은 확정하지 않고 보류)
 ├── sources/

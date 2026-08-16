@@ -24,13 +24,14 @@
 | `politics-tracker parse-minutes` | 텍스트 파일에서 발언 추출 | 동작 |
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
-| `pytest` | 테스트 42건 | 전부 통과 |
+| `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
+| `pytest` | 테스트 47건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
 ```text
 politics_tracker/
-├── models.py              Person / Utterance. 출처 URL 없는 발언은 생성자에서 예외
+├── models.py              Person / Utterance / ReviewItem. 출처·검수 불변성 강제
 ├── storage.py             SQLite 운영 저장소 + JSONL 교환 저장소
 ├── matching.py            화자 매칭. 동명이인은 person_id를 붙이지 않고 보류
 ├── sources/
@@ -41,7 +42,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     42건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     47건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -354,11 +355,19 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 목적: Phase 2의 모든 저신뢰 산출물이 지나가는 관문. 자동 공개를 막는 인프라다.
 
 - T3.1 `review_item` 스키마(§3.6)와 저장 테이블.
+  **완료(2026-08-16):** `schemas/review_item.schema.json`, 결정적 `rev_` ID,
+  SQLite reviews 테이블과 상태·종류 인덱스를 추가했다.
 - T3.2 적재 연결: `classify-topics --backend claude`의 보류 건을 큐에 자동 적재하도록
   기존 코드를 연결한다(현재는 topic_source 표기만 하고 버린다).
+  **완료(2026-08-16):** `held:low_confidence`와 `held:refusal` 결과를 결정적 ID로
+  적재한다. 같은 분류를 재실행해도 기존 생성·판정 이력을 보존하고 중복을 만들지 않는다.
 - T3.3 CLI: `review list [--kind]`, `review show ID`, `review approve ID [--edit KEY=VALUE]`,
   `review reject ID --note`. 승인 시 대상 레코드에 반영하고 `human_reviewed: true`를
   기록한다. 결정은 수정 불가, 번복은 새 결정 append.
+  **완료(2026-08-16):** 네 명령을 구현했다. topic 승인은 유효한 주제 최대 3개만
+  허용하고 발언에 `human_reviewed: true`를 기록한다. 승인·기각 후 같은 review ID의
+  재결정은 저장 계층에서 거부한다. 사람이 확정한 주제는 이후 rules·Claude 재분류가
+  덮어쓰지 않는다.
 - 완료 기준: 저신뢰 주제 분류 1건이 큐 적재 → 승인 → 레코드 반영 → 사이트 표시까지
   이어지는 흐름이 테스트로 검증된다.
 

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/review_item.schema.json",
+  "title": "ReviewItem",
+  "description": "저신뢰 자동 산출물의 인간 검수 큐 항목. pending 상태에서 한 번만 결정할 수 있다.",
+  "type": "object",
+  "required": ["review_id", "kind", "target_id", "payload", "reason", "status", "created_at"],
+  "properties": {
+    "review_id": { "type": "string", "pattern": "^rev_" },
+    "kind": {
+      "type": "string",
+      "enum": ["topic", "stance", "match", "bill_link", "stance_change", "prediction"]
+    },
+    "target_id": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" },
+    "reason": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "decided_at": { "type": ["string", "null"], "format": "date-time" },
+    "note": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

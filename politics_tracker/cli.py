@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
-from .enrich.topics import classify_rules
+from .enrich.topics import TOPICS, classify_rules
 from .matching import match_utterances
-from .models import Person
+from .models import Person, ReviewItem, review_id_for
 from .site.build import build_site
 from .sources.assembly_api import (
     DEFAULT_COMMITTEE_MINUTES_SERVICE_ID,
@@ -223,6 +223,28 @@ def cmd_classify_topics(args: argparse.Namespace) -> int:
         )
 
     store.save_utterances(utterances)
+    queued = 0
+    if args.backend == "claude":
+        for utterance in utterances:
+            if not (utterance.topic_source or "").startswith("held:"):
+                continue
+            payload = {
+                "topics": list(utterance.topics),
+                "topic_source": utterance.topic_source,
+            }
+            review = ReviewItem(
+                review_id=review_id_for(
+                    "topic", utterance.utterance_id, utterance.topic_source or "held", payload
+                ),
+                kind="topic",
+                target_id=utterance.utterance_id,
+                payload=payload,
+                reason=utterance.topic_source or "held",
+                status="pending",
+                created_at=_now_iso(),
+            )
+            queued += int(store.enqueue_review(review))
+        stats["queued_for_review"] = queued
     print(f"주제 분류({args.backend}): {stats}")
     return 0
 
@@ -312,10 +334,15 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
         return 1
     people = source.load_people()
     utterances = source.load_utterances()
+    reviews = source.load_reviews()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
-    print(f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건 → {target.db_path}")
+    target.save_reviews(reviews)
+    print(
+        f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
+        f"검수 {len(reviews)}건 → {target.db_path}"
+    )
     return 0
 
 
@@ -323,10 +350,117 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     source = SqliteStore(args.db)
     people = source.load_people()
     utterances = source.load_utterances()
+    reviews = source.load_reviews()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
-    print(f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건 → {target.root}")
+    target.save_reviews(reviews)
+    print(
+        f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
+        f"검수 {len(reviews)}건 → {target.root}"
+    )
+    return 0
+
+
+def _review_edits(values: list[str] | None) -> dict:
+    edits = {}
+    for value in values or []:
+        if "=" not in value:
+            raise ValueError(f"--edit는 KEY=VALUE 형식이어야 합니다: {value}")
+        key, raw = value.split("=", 1)
+        if key == "topics":
+            edits[key] = [item.strip() for item in raw.split(",") if item.strip()]
+            continue
+        try:
+            edits[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            edits[key] = raw
+    return edits
+
+
+def cmd_review_list(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    reviews = store.load_reviews(kind=args.kind, status=args.status)
+    for review in reviews:
+        print(
+            f"{review.review_id}  {review.kind:<14} {review.status:<8} "
+            f"{review.target_id}  {review.reason}"
+        )
+    print(f"총 {len(reviews)}건")
+    return 0
+
+
+def cmd_review_show(args: argparse.Namespace) -> int:
+    review = SqliteStore(args.db).get_review(args.review_id)
+    if review is None:
+        print(f"검수 항목을 찾을 수 없습니다: {args.review_id}", file=sys.stderr)
+        return 1
+    print(json.dumps(review.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_review_approve(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    review = store.get_review(args.review_id)
+    if review is None:
+        print(f"검수 항목을 찾을 수 없습니다: {args.review_id}", file=sys.stderr)
+        return 1
+    if review.status != "pending":
+        print(f"이미 결정된 검수 항목입니다: {review.status}", file=sys.stderr)
+        return 1
+    if review.kind != "topic":
+        print(f"아직 승인 반영을 지원하지 않는 종류입니다: {review.kind}", file=sys.stderr)
+        return 1
+
+    try:
+        edits = _review_edits(args.edit)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    payload = {**review.payload, **edits}
+    topics = payload.get("topics")
+    if not isinstance(topics, list) or not all(topic in TOPICS for topic in topics):
+        print("topic 승인은 유효한 topics 목록이 필요합니다.", file=sys.stderr)
+        return 1
+    if len(topics) > 3:
+        print("발언당 주제는 최대 3개입니다.", file=sys.stderr)
+        return 1
+
+    utterances = store.load_utterances()
+    target = next(
+        (utterance for utterance in utterances if utterance.utterance_id == review.target_id),
+        None,
+    )
+    if target is None:
+        print(f"대상 발언을 찾을 수 없습니다: {review.target_id}", file=sys.stderr)
+        return 1
+    target.topics = list(topics)
+    target.topic_source = "human_reviewed"
+    target.human_reviewed = True
+    store.save_utterances(utterances)
+    decided = store.decide_review(
+        review.review_id,
+        status="approved",
+        decided_at=_now_iso(),
+        note=args.note,
+    )
+    print(f"승인 완료: {decided.review_id} → {decided.target_id}")
+    return 0
+
+
+def cmd_review_reject(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    try:
+        review = store.decide_review(
+            args.review_id,
+            status="rejected",
+            decided_at=_now_iso(),
+            note=args.note,
+        )
+    except (KeyError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"기각 완료: {review.review_id} → {review.target_id}")
     return 0
 
 
@@ -411,6 +545,35 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--db", default=DEFAULT_DB_PATH)
     export.add_argument("--out", default="data/export")
     export.set_defaults(func=cmd_export_jsonl)
+
+    review = sub.add_parser("review", help="저신뢰 산출물 검수 큐 관리")
+    review_actions = review.add_subparsers(dest="review_command", required=True)
+
+    review_list = review_actions.add_parser("list", help="검수 항목 목록")
+    review_list.add_argument("--kind", default=None)
+    review_list.add_argument(
+        "--status", choices=["pending", "approved", "rejected"], default="pending"
+    )
+    review_list.add_argument("--db", default=DEFAULT_DB_PATH)
+    review_list.set_defaults(func=cmd_review_list)
+
+    review_show = review_actions.add_parser("show", help="검수 항목 상세")
+    review_show.add_argument("review_id")
+    review_show.add_argument("--db", default=DEFAULT_DB_PATH)
+    review_show.set_defaults(func=cmd_review_show)
+
+    review_approve = review_actions.add_parser("approve", help="검수 항목 승인·반영")
+    review_approve.add_argument("review_id")
+    review_approve.add_argument("--edit", action="append", metavar="KEY=VALUE")
+    review_approve.add_argument("--note", default=None)
+    review_approve.add_argument("--db", default=DEFAULT_DB_PATH)
+    review_approve.set_defaults(func=cmd_review_approve)
+
+    review_reject = review_actions.add_parser("reject", help="검수 항목 기각")
+    review_reject.add_argument("review_id")
+    review_reject.add_argument("--note", required=True)
+    review_reject.add_argument("--db", default=DEFAULT_DB_PATH)
+    review_reject.set_defaults(func=cmd_review_reject)
 
     return p
 
