@@ -120,6 +120,7 @@ def test_full_curated_page_is_answer_first_and_keeps_complete_finder(tmp_path):
     assert "정책적 의미" in page
     assert "원문 문맥 확인" in page
     assert page.count('class="ai-mention"') == len(utterances)
+    assert ".ai-mention, .ai-evidence-item { overflow-wrap: anywhere; }" in page
     assert 'id="ai-query"' in page
     assert 'data-ai-topic-filter=' not in page
     assert "월별 언급량" not in page
