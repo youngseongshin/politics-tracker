@@ -1,5 +1,15 @@
-from politics_tracker.enrich.stances import load_stance_axes
-from politics_tracker.models import Stance, stance_id_for
+import json
+from argparse import Namespace
+from types import SimpleNamespace
+
+from politics_tracker import cli
+from politics_tracker.enrich.stances import (
+    extract_stances_claude,
+    extract_stances_rules,
+    load_stance_axes,
+    normalized_quote_exists,
+)
+from politics_tracker.models import Person, Stance, Utterance, stance_id_for
 from politics_tracker.storage import SqliteStore
 
 
@@ -18,6 +28,21 @@ def _stance(*, reviewed=False, value=-0.7):
             "prompt_version": "stance_rules_v1",
         },
         human_reviewed=reviewed,
+    )
+
+
+def _utterance(text="주택 공급을 확대해야 합니다."):
+    return Utterance(
+        utterance_id="utt_1",
+        speaker_name="이가상",
+        speaker_role="의원",
+        spoken_at="2026-07-15",
+        venue={"type": "assembly_plenary", "session": "가상 본회의"},
+        text=text,
+        source={"kind": "assembly_minutes", "url": "https://example.invalid/1"},
+        person_id="p1",
+        topics=["housing"],
+        topic_source="rules",
     )
 
 
@@ -56,3 +81,111 @@ def test_sqlite_stance_roundtrip_and_reviewed_result_is_not_overwritten(tmp_path
     loaded = store.load_stances(published_only=True)
     assert loaded == [reviewed]
     assert loaded[0].value == -0.7
+
+
+def test_rules_extract_direction_and_hold_conflicting_phrases():
+    axes = load_stance_axes()
+    extracted, stats = extract_stances_rules([_utterance()], axes)
+    assert len(extracted) == 1
+    assert extracted[0].axis == "housing_regulation"
+    assert extracted[0].value == -0.7
+    assert extracted[0].rationale_quote == "주택 공급을 확대"
+    assert extracted[0].held_reason is None
+    assert stats["extracted"] == 1
+
+    conflict = _utterance("공급 확대와 함께 투기를 억제해야 합니다.")
+    held, held_stats = extract_stances_rules([conflict], axes)
+    assert held[0].value == 0
+    assert held[0].held_reason == "conflicting_rule_phrases"
+    assert held_stats["held"] == 1
+
+
+def test_normalized_quote_guard_accepts_only_original_text():
+    assert normalized_quote_exists("주택  공급을\n확대합니다.", "주택 공급을 확대합니다.")
+    assert not normalized_quote_exists("주택 공급을 확대합니다.", "규제를 강화합니다")
+
+
+class FakeClient:
+    def __init__(self, results=None, *, refusal=False):
+        self.calls = []
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+        self.response = SimpleNamespace(
+            stop_reason="refusal" if refusal else "end_turn",
+            model="claude-test",
+            content=[
+                SimpleNamespace(
+                    type="text", text=json.dumps({"results": results or []})
+                )
+            ],
+        )
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
+def test_claude_holds_low_confidence_invalid_quote_and_refusal():
+    axes = load_stance_axes()
+    utterance = _utterance()
+    low = FakeClient(
+        [
+            {
+                "utterance_id": "utt_1",
+                "axis": "housing_regulation",
+                "value": -0.8,
+                "confidence": 0.4,
+                "rationale_quote": "주택 공급을 확대",
+            }
+        ]
+    )
+    low_stances, low_stats = extract_stances_claude(
+        [utterance], axes, client=low
+    )
+    assert low_stances[0].held_reason == "low_confidence"
+    assert low_stats["held_low_confidence"] == 1
+
+    invalid = FakeClient(
+        [
+            {
+                "utterance_id": "utt_1",
+                "axis": "housing_regulation",
+                "value": -0.8,
+                "confidence": 0.9,
+                "rationale_quote": "원문에 없는 문장",
+            }
+        ]
+    )
+    invalid_stances, invalid_stats = extract_stances_claude(
+        [utterance], axes, client=invalid
+    )
+    assert invalid_stances[0].held_reason == "invalid_quote"
+    assert invalid_stances[0].rationale_quote == ""
+    assert invalid_stats["held_invalid_quote"] == 1
+
+    refused, refused_stats = extract_stances_claude(
+        [utterance], axes, client=FakeClient(refusal=True)
+    )
+    assert refused[0].held_reason == "refusal"
+    assert refused_stats["held_refusal"] == 1
+
+
+def test_extract_stances_cli_is_idempotent_and_queues_held(tmp_path):
+    db_path = tmp_path / "db.sqlite"
+    store = SqliteStore(db_path)
+    store.save_people([Person(person_id="p1", name="이가상")])
+    store.save_utterances(
+        [_utterance("공급 확대와 함께 투기를 억제해야 합니다.")]
+    )
+    args = Namespace(
+        db=str(db_path),
+        axes="config/stance_axes.yaml",
+        backend="rules",
+        model="unused",
+        prompt_version="unused",
+        batch_size=20,
+        confidence_threshold=0.7,
+    )
+    assert cli.cmd_extract_stances(args) == 0
+    assert cli.cmd_extract_stances(args) == 0
+    assert len(store.load_stances()) == 1
+    assert len(store.load_reviews(kind="stance", status="pending")) == 1

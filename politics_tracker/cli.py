@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .enrich.topics import TOPICS, classify_rules
 from .matching import match_utterances
-from .models import Person, ReviewItem, review_id_for
+from .models import Person, ReviewItem, Stance, review_id_for
 from .site.build import build_site
 from .sources.assembly_api import (
     DEFAULT_COMMITTEE_MINUTES_SERVICE_ID,
@@ -249,6 +249,53 @@ def cmd_classify_topics(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_extract_stances(args: argparse.Namespace) -> int:
+    from .enrich.stances import (
+        extract_stances_claude,
+        extract_stances_rules,
+        load_stance_axes,
+    )
+
+    store = SqliteStore(args.db)
+    utterances = store.load_utterances()
+    if not utterances:
+        print("저장소에 발언이 없습니다.", file=sys.stderr)
+        return 1
+    axes = load_stance_axes(args.axes)
+    if args.backend == "rules":
+        stances, stats = extract_stances_rules(utterances, axes)
+    else:
+        stances, stats = extract_stances_claude(
+            utterances,
+            axes,
+            model=args.model,
+            prompt_version=args.prompt_version,
+            batch_size=args.batch_size,
+            confidence_threshold=args.confidence_threshold,
+        )
+    added = store.upsert_stances(stances)
+    queued = 0
+    for stance in stances:
+        if not stance.held_reason:
+            continue
+        payload = stance.to_dict()
+        reason = f"held:{stance.held_reason}"
+        review = ReviewItem(
+            review_id=review_id_for("stance", stance.stance_id, reason, payload),
+            kind="stance",
+            target_id=stance.stance_id,
+            payload=payload,
+            reason=reason,
+            status="pending",
+            created_at=_now_iso(),
+        )
+        queued += int(store.enqueue_review(review))
+    stats["stored_new"] = added
+    stats["queued_for_review"] = queued
+    print(f"입장 추출({args.backend}): {stats}")
+    return 0
+
+
 def cmd_verify_api(args: argparse.Namespace) -> int:
     """실제 API 키로 연결성·서비스 ID·필드 매핑을 점검한다. 로컬에서 실행."""
     from .sources.assembly_api import AssemblyAPIError, AssemblyOpenAPI, normalize_member
@@ -404,6 +451,8 @@ def cmd_review_show(args: argparse.Namespace) -> int:
 
 
 def cmd_review_approve(args: argparse.Namespace) -> int:
+    from .enrich.stances import normalized_quote_exists
+
     store = SqliteStore(args.db)
     review = store.get_review(args.review_id)
     if review is None:
@@ -412,7 +461,7 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
     if review.status != "pending":
         print(f"이미 결정된 검수 항목입니다: {review.status}", file=sys.stderr)
         return 1
-    if review.kind != "topic":
+    if review.kind not in {"topic", "stance"}:
         print(f"아직 승인 반영을 지원하지 않는 종류입니다: {review.kind}", file=sys.stderr)
         return 1
 
@@ -422,26 +471,64 @@ def cmd_review_approve(args: argparse.Namespace) -> int:
         print(str(error), file=sys.stderr)
         return 1
     payload = {**review.payload, **edits}
-    topics = payload.get("topics")
-    if not isinstance(topics, list) or not all(topic in TOPICS for topic in topics):
-        print("topic 승인은 유효한 topics 목록이 필요합니다.", file=sys.stderr)
-        return 1
-    if len(topics) > 3:
-        print("발언당 주제는 최대 3개입니다.", file=sys.stderr)
-        return 1
+    if review.kind == "topic":
+        topics = payload.get("topics")
+        if not isinstance(topics, list) or not all(topic in TOPICS for topic in topics):
+            print("topic 승인은 유효한 topics 목록이 필요합니다.", file=sys.stderr)
+            return 1
+        if len(topics) > 3:
+            print("발언당 주제는 최대 3개입니다.", file=sys.stderr)
+            return 1
 
-    utterances = store.load_utterances()
-    target = next(
-        (utterance for utterance in utterances if utterance.utterance_id == review.target_id),
-        None,
-    )
-    if target is None:
-        print(f"대상 발언을 찾을 수 없습니다: {review.target_id}", file=sys.stderr)
-        return 1
-    target.topics = list(topics)
-    target.topic_source = "human_reviewed"
-    target.human_reviewed = True
-    store.save_utterances(utterances)
+        utterances = store.load_utterances()
+        target = next(
+            (utterance for utterance in utterances if utterance.utterance_id == review.target_id),
+            None,
+        )
+        if target is None:
+            print(f"대상 발언을 찾을 수 없습니다: {review.target_id}", file=sys.stderr)
+            return 1
+        target.topics = list(topics)
+        target.topic_source = "human_reviewed"
+        target.human_reviewed = True
+        store.save_utterances(utterances)
+    else:
+        target_stance = next(
+            (stance for stance in store.load_stances() if stance.stance_id == review.target_id),
+            None,
+        )
+        if target_stance is None:
+            print(f"대상 입장을 찾을 수 없습니다: {review.target_id}", file=sys.stderr)
+            return 1
+        utterance = next(
+            (
+                item
+                for item in store.load_utterances()
+                if item.utterance_id == target_stance.utterance_id
+            ),
+            None,
+        )
+        quote = str(payload.get("rationale_quote", ""))
+        if utterance is None or not normalized_quote_exists(utterance.text, quote):
+            print("입장 근거 인용구가 발언 원문에 없습니다.", file=sys.stderr)
+            return 1
+        payload.update(
+            {
+                "stance_id": target_stance.stance_id,
+                "utterance_id": target_stance.utterance_id,
+                "person_id": target_stance.person_id,
+                "axis": target_stance.axis,
+                "extractor": target_stance.extractor,
+                "human_reviewed": True,
+                "held_reason": None,
+            }
+        )
+        try:
+            approved_stance = Stance.from_dict(payload)
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"입장 승인 값이 유효하지 않습니다: {error}", file=sys.stderr)
+            return 1
+        store.upsert_stances([approved_stance])
     decided = store.decide_review(
         review.review_id,
         status="approved",
@@ -526,6 +613,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="이 값 미만이면 주제를 붙이지 않고 보류")
     c.add_argument("--db", default=DEFAULT_DB_PATH)
     c.set_defaults(func=cmd_classify_topics)
+
+    stance = sub.add_parser("extract-stances", help="주제 발언에서 정책 축 입장 추출")
+    stance.add_argument("--backend", choices=["rules", "claude"], default="rules")
+    stance.add_argument("--model", default="claude-opus-5")
+    stance.add_argument("--prompt-version", default="stance_v1")
+    stance.add_argument("--batch-size", type=int, default=20)
+    stance.add_argument("--confidence-threshold", type=float, default=0.7)
+    stance.add_argument("--axes", default="config/stance_axes.yaml")
+    stance.add_argument("--db", default=DEFAULT_DB_PATH)
+    stance.set_defaults(func=cmd_extract_stances)
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")

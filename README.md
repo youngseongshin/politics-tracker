@@ -57,7 +57,11 @@ politics-tracker classify-topics
 # LLM 백엔드 (pip install -e ".[llm]" + ANTHROPIC_API_KEY 필요, 저신뢰는 보류 처리)
 politics-tracker classify-topics --backend claude
 
-# 4. 정적 사이트 생성
+# 4. 정책 축 입장 추출. 기본은 보수적 문구 규칙, Claude는 구조화 출력 사용
+politics-tracker extract-stances --backend rules
+# politics-tracker extract-stances --backend claude
+
+# 5. 정적 사이트 생성
 politics-tracker build-site --out ./site_out
 ```
 

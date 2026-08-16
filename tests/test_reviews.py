@@ -4,7 +4,14 @@ import pytest
 
 from politics_tracker import cli
 from politics_tracker.enrich import topics as topics_module
-from politics_tracker.models import Person, ReviewItem, Utterance, review_id_for
+from politics_tracker.models import (
+    Person,
+    ReviewItem,
+    Stance,
+    Utterance,
+    review_id_for,
+    stance_id_for,
+)
 from politics_tracker.site.build import build_site
 from politics_tracker.storage import SqliteStore
 
@@ -117,3 +124,50 @@ def test_topic_review_approval_updates_record_and_site(tmp_path):
     build_site(people, [utterance], site)
     housing = (site / "topic" / "housing.html").read_text(encoding="utf-8")
     assert "부동산과 주택 공급에 관한 발언입니다." in housing
+
+
+def test_stance_review_requires_original_quote_and_marks_reviewed(tmp_path):
+    db_path = tmp_path / "db.sqlite"
+    store = SqliteStore(db_path)
+    store.save_people([Person(person_id="p1", name="이가상")])
+    utterance = _utterance()
+    store.save_utterances([utterance])
+    stance = Stance(
+        stance_id=stance_id_for("utt_held", "housing_regulation", "stance_v1"),
+        utterance_id="utt_held",
+        person_id="p1",
+        axis="housing_regulation",
+        value=-0.4,
+        confidence=0.4,
+        rationale_quote="부동산과 주택 공급",
+        extractor={
+            "backend": "claude",
+            "model": "claude-test",
+            "prompt_version": "stance_v1",
+        },
+        held_reason="low_confidence",
+    )
+    store.save_stances([stance])
+    payload = stance.to_dict()
+    review = ReviewItem(
+        review_id=review_id_for("stance", stance.stance_id, "held:low_confidence", payload),
+        kind="stance",
+        target_id=stance.stance_id,
+        payload=payload,
+        reason="held:low_confidence",
+        status="pending",
+        created_at="2026-08-16T00:00:00Z",
+    )
+    store.enqueue_review(review)
+    args = Namespace(
+        db=str(db_path),
+        review_id=review.review_id,
+        edit=["value=-0.8", "confidence=1", "rationale_quote=부동산과 주택 공급"],
+        note="원문 대조 완료",
+    )
+    assert cli.cmd_review_approve(args) == 0
+    approved = store.load_stances()[0]
+    assert approved.value == -0.8
+    assert approved.confidence == 1
+    assert approved.human_reviewed is True
+    assert approved.held_reason is None

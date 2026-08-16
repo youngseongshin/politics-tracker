@@ -25,7 +25,8 @@
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
-| `pytest` | 테스트 50건 | 전부 통과 |
+| `politics-tracker extract-stances` | 정책 축 입장 추출 | rules·Claude 페이크·인용구 가드 동작 |
+| `pytest` | 테스트 55건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -42,7 +43,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     50건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     55건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -384,6 +385,11 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
   `classify_claude`의 골격(배치, 임계값, refusal 처리)을 재사용한다. 임계값 0.7
   미만은 큐로 보낸다. `rationale_quote`가 발언 원문의 부분 문자열이 아니면 자동
   반려한다(할루시네이션 가드, 공백 정규화 후 비교).
+  **완료(2026-08-16):** 결정적 rules 폴백과 Claude 구조화 출력 경로를 구현했다.
+  낮은 신뢰도, refusal, 범위 밖 숫자, 원문에 없는 인용구는 held stance와 검수 항목으로
+  저장한다. 승인 시 인용구를 다시 대조하고 사람이 확정한 입장은 재추출로 덮지 않는다.
+  실데이터 rules 실행에서는 후보 146건 중 19건을 공개 가능 입장으로 추출했고 재실행
+  신규 건수는 0이었다.
 - T4.3 변화 감지: 같은 인물·같은 축에서 시간순 인접 값의 차이가 0.8 이상이면
   stance_change 후보를 만든다. 후보는 전건 검수 큐로 보내고 승인 전에는 사이트에
   싣지 않는다. 승인 시 맥락 주석(당적 변경, 지역구 변경 등)을 함께 기록한다.
