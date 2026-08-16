@@ -70,6 +70,12 @@ politics-tracker link-bills --backend rules
 # politics-tracker link-bills --backend claude
 politics-tracker compute-consistency
 
+# 4-c. 공식 원문과 대조한 공약 YAML 등록 및 근거가 있는 상태 이력 추가
+politics-tracker pledge import data/pledges
+politics-tracker pledge list
+# politics-tracker pledge set-status pledge_... --status "부분 이행" \
+#   --evidence "https://공식-근거.example/source" --note "일부 완료를 확인한 근거"
+
 # 5. 정적 사이트 생성
 politics-tracker build-site --out ./site_out
 ```
@@ -119,7 +125,7 @@ GitHub Actions에서 수집할 때는 저장소 Actions Secret에 `ASSEMBLY_API_
 
 ```text
 politics_tracker/
-├── models.py              Person / Utterance / ReviewItem — 출처·검수 불변성 강제
+├── models.py              발언·입장·표결·공약 모델과 출처·이력 불변성
 ├── storage.py             SQLite 운영 저장소 + JSONL 마이그레이션·교환 포맷
 ├── matching.py            화자→인물 매칭 (동명이인은 확정하지 않고 보류)
 ├── sources/
@@ -128,6 +134,7 @@ politics_tracker/
 │   └── assembly_api.py    열린국회정보 Open API 클라이언트
 ├── enrich/
 │   └── topics.py          주제 분류 — rules(키워드) / claude(구조화 출력, 저신뢰 보류)
+├── pledges.py             공식 원문 대조 공약 YAML 로더
 ├── site/                  Jinja2 정적 사이트 빌더 (렌더 레이어는 추후 Next.js로 교체 가능)
 └── samples/               가상 샘플 데이터 (quickstart용)
 schemas/                   person / utterance JSON Schema

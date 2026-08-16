@@ -86,6 +86,39 @@
 </section>
 {% endif %}
 
+{% if pledge_summary %}
+<section id="pledges">
+  <h2>공약 이행 기록</h2>
+  <p class="muted">각 공약은 등록할 때 정한 기준과 근거별 판정 이력을 함께 표시합니다. 상태 개수는 아래 공약 전건에서 계산합니다.</p>
+  <div class="status-counts">
+    {% for item in pledge_summary.counts %}
+    <div><span>{{ item.status }}</span><strong class="num">{{ item.count }}건</strong></div>
+    {% endfor %}
+  </div>
+  <div class="pledge-list">
+  {% for pledge in pledge_summary.rows %}
+    <article class="pledge-item" id="{{ pledge.pledge_id }}">
+      <h3>{{ pledge.text }}</h3>
+      <p><strong>현재 상태: {{ pledge.current_status }}</strong> · <a href="{{ pledge.source.url }}" rel="noopener">{{ pledge.source.title }}</a></p>
+      <p class="pledge-criteria"><strong>판정 기준:</strong> {{ pledge.criteria }}</p>
+      <ol class="status-history">
+      {% for history in pledge.status_history | reverse %}
+        <li>
+          <strong>{{ history.status }}</strong> · <span class="num">{{ history.decided_at }}</span>
+          <ul>
+          {% for evidence in history.evidence %}
+            <li><a href="{{ evidence.url }}" rel="noopener">근거</a>: {{ evidence.note }}</li>
+          {% endfor %}
+          </ul>
+        </li>
+      {% endfor %}
+      </ol>
+    </article>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <div id="active-topic-filter" class="active-filter" hidden>
   <span><strong id="active-topic-label"></strong> 주제 발언만 표시합니다.</span>
   <button type="button" id="reset-topic-filter" class="text-button">전체 보기</button>

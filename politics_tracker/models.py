@@ -9,7 +9,9 @@ Person(인물), Utterance(발언), 그리고 발언에 내장되는 source(출�
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 from dataclasses import dataclass, field, asdict
+from datetime import date
 from typing import Any
 
 
@@ -359,6 +361,94 @@ class ConsistencyPair:
 def consistency_id_for(stance_id: str, vote_id: str, formula_version: str) -> str:
     canonical = f"{stance_id}\0{vote_id}\0{formula_version}".encode("utf-8")
     return "cons_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
+PLEDGE_STATUSES = {"이행", "부분 이행", "미이행", "검증 불가"}
+
+
+@dataclass
+class Pledge:
+    pledge_id: str
+    person_id: str
+    text: str
+    source: dict[str, Any]
+    criteria: str
+    status_history: list[dict[str, Any]]
+
+    def __post_init__(self) -> None:
+        if not self.pledge_id.startswith("pledge_"):
+            raise ValueError("Pledge.pledge_id must start with pledge_")
+        if not self.person_id or not self.text.strip() or not self.criteria.strip():
+            raise ValueError("Pledge requires person_id, text, and criteria")
+        if not all(self.source.get(key) for key in ("kind", "url", "title")):
+            raise ValueError("Pledge.source requires kind, url, and title")
+        if not self.status_history:
+            raise ValueError("Pledge requires at least one status history entry")
+
+        previous_date: date | None = None
+        for entry in self.status_history:
+            status = entry.get("status")
+            if status not in PLEDGE_STATUSES:
+                raise ValueError(f"Invalid pledge status: {status}")
+            try:
+                decided_at = date.fromisoformat(entry.get("decided_at", ""))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Pledge status decided_at must be an ISO date") from exc
+            if previous_date and decided_at < previous_date:
+                raise ValueError("Pledge status history must be chronological")
+            previous_date = decided_at
+            evidence = entry.get("evidence")
+            if not isinstance(evidence, list) or not evidence:
+                raise ValueError("Pledge status requires evidence")
+            for item in evidence:
+                if not isinstance(item, dict) or not item.get("url") or not item.get("note"):
+                    raise ValueError("Pledge evidence requires url and note")
+
+    @property
+    def current_status(self) -> str:
+        return self.status_history[-1]["status"]
+
+    def with_status(
+        self,
+        *,
+        status: str,
+        decided_at: str,
+        evidence: list[dict[str, str]],
+    ) -> "Pledge":
+        entry = {
+            "status": status,
+            "decided_at": decided_at,
+            "evidence": deepcopy(evidence),
+        }
+        if self.status_history[-1] == entry:
+            return self
+        return Pledge(
+            pledge_id=self.pledge_id,
+            person_id=self.person_id,
+            text=self.text,
+            source=deepcopy(self.source),
+            criteria=self.criteria,
+            status_history=deepcopy(self.status_history) + [entry],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Pledge":
+        return cls(
+            pledge_id=data["pledge_id"],
+            person_id=data["person_id"],
+            text=data["text"],
+            source=deepcopy(data.get("source") or {}),
+            criteria=data["criteria"],
+            status_history=deepcopy(data.get("status_history") or []),
+        )
+
+
+def pledge_id_for(person_id: str, text: str, source_url: str) -> str:
+    canonical = f"{person_id}\0{text.strip()}\0{source_url}".encode("utf-8")
+    return "pledge_" + hashlib.sha256(canonical).hexdigest()[:16]
 
 
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:

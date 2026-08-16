@@ -21,6 +21,7 @@ from ..models import (
     Bill,
     ConsistencyPair,
     Person,
+    Pledge,
     ReviewItem,
     Stance,
     Utterance,
@@ -298,6 +299,30 @@ def _consistency_by_person(
     return result
 
 
+_PLEDGE_STATUS_ORDER = ("이행", "부분 이행", "미이행", "검증 불가")
+
+
+def _pledges_by_person(pledges: list[Pledge]) -> dict[str, dict]:
+    grouped: dict[str, list[Pledge]] = defaultdict(list)
+    for pledge in pledges:
+        grouped[pledge.person_id].append(pledge)
+
+    summaries = {}
+    for person_id, rows in grouped.items():
+        rows.sort(key=lambda pledge: (pledge.current_status, pledge.text, pledge.pledge_id))
+        summaries[person_id] = {
+            "counts": [
+                {
+                    "status": status,
+                    "count": sum(pledge.current_status == status for pledge in rows),
+                }
+                for status in _PLEDGE_STATUS_ORDER
+            ],
+            "rows": rows,
+        }
+    return summaries
+
+
 def build_site(
     people: list[Person],
     utterances: list[Utterance],
@@ -309,6 +334,7 @@ def build_site(
     bills: list[Bill] | None = None,
     votes: list[Vote] | None = None,
     consistency_pairs: list[ConsistencyPair] | None = None,
+    pledges: list[Pledge] | None = None,
 ) -> BuildStats:
     out = Path(out_dir)
     (out / "person").mkdir(parents=True, exist_ok=True)
@@ -320,9 +346,11 @@ def build_site(
     bills = bills or []
     votes = votes or []
     consistency_pairs = consistency_pairs or []
+    pledges = pledges or []
     consistency = _consistency_by_person(
         consistency_pairs, bills, votes, utterances, stances, stance_axes
     )
+    pledge_summaries = _pledges_by_person(pledges)
 
     by_person: dict[str, list[Utterance]] = defaultdict(list)
     unmatched = 0
@@ -351,6 +379,7 @@ def build_site(
                 person.person_id, reviews, stances, utterances, stance_axes
             ),
             consistency=consistency.get(person.person_id),
+            pledge_summary=pledge_summaries.get(person.person_id),
             generated_at=generated_at,
         )
         (out / "person" / f"{person.person_id}.html").write_text(html, encoding="utf-8")

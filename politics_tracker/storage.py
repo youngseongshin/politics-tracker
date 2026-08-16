@@ -15,6 +15,7 @@ from .models import (
     Bill,
     ConsistencyPair,
     Person,
+    Pledge,
     ReviewItem,
     Stance,
     Utterance,
@@ -37,6 +38,7 @@ class Store:
         self.votes_path = self.root / "votes.jsonl"
         self.bill_links_path = self.root / "utterance_bill_links.jsonl"
         self.consistency_pairs_path = self.root / "consistency_pairs.jsonl"
+        self.pledges_path = self.root / "pledges.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -107,6 +109,35 @@ class Store:
             ConsistencyPair.from_dict(data)
             for data in _read_jsonl(self.consistency_pairs_path)
         ]
+
+    # -- pledges --------------------------------------------------------
+    def save_pledges(self, pledges: list[Pledge]) -> None:
+        existing = {pledge.pledge_id: pledge for pledge in self.load_pledges()}
+        incoming = {pledge.pledge_id: pledge for pledge in pledges}
+        if len(incoming) != len(pledges):
+            raise ValueError("Duplicate pledge_id in pledge collection")
+        missing = sorted(set(existing) - set(incoming))
+        if missing:
+            raise ValueError(f"Pledge records cannot be removed: {', '.join(missing)}")
+        for pledge_id, old in existing.items():
+            _validate_pledge_update(old, incoming[pledge_id])
+        _write_jsonl(self.pledges_path, [pledge.to_dict() for pledge in pledges])
+
+    def load_pledges(self) -> list[Pledge]:
+        return [Pledge.from_dict(data) for data in _read_jsonl(self.pledges_path)]
+
+    def upsert_pledges(self, pledges: list[Pledge]) -> int:
+        if len({pledge.pledge_id for pledge in pledges}) != len(pledges):
+            raise ValueError("Duplicate pledge_id in pledge collection")
+        existing = {pledge.pledge_id: pledge for pledge in self.load_pledges()}
+        added = sum(pledge.pledge_id not in existing for pledge in pledges)
+        for pledge in pledges:
+            old = existing.get(pledge.pledge_id)
+            if old:
+                _validate_pledge_update(old, pledge)
+            existing[pledge.pledge_id] = pledge
+        self.save_pledges(list(existing.values()))
+        return added
 
 
 _SQLITE_SCHEMA = """
@@ -202,6 +233,18 @@ CREATE TABLE IF NOT EXISTS consistency_pairs (
 CREATE INDEX IF NOT EXISTS idx_consistency_person ON consistency_pairs(person_id);
 CREATE INDEX IF NOT EXISTS idx_consistency_bill ON consistency_pairs(bill_id);
 
+CREATE TABLE IF NOT EXISTS pledges (
+    pledge_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL,
+    current_status TEXT NOT NULL
+        CHECK (current_status IN ('이행', '부분 이행', '미이행', '검증 불가')),
+    list_order INTEGER NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pledges_person ON pledges(person_id);
+CREATE INDEX IF NOT EXISTS idx_pledges_status ON pledges(current_status);
+
 CREATE TABLE IF NOT EXISTS reviews (
     review_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -222,6 +265,15 @@ CREATE INDEX IF NOT EXISTS idx_reviews_status_kind_created
 def _json(value) -> str:
     # raw 응답의 필드 순서까지 JSONL export에서 보존한다.
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _validate_pledge_update(old: Pledge, new: Pledge) -> None:
+    immutable_old = (old.person_id, old.text, old.source, old.criteria)
+    immutable_new = (new.person_id, new.text, new.source, new.criteria)
+    if immutable_old != immutable_new:
+        raise ValueError("Registered pledge text, source, and criteria are immutable")
+    if new.status_history[: len(old.status_history)] != old.status_history:
+        raise ValueError("Pledge status history is append-only")
 
 
 class SqliteStore:
@@ -812,6 +864,123 @@ class SqliteStore:
                 ConsistencyPair.from_dict(json.loads(row["payload_json"]))
                 for row in rows
             ]
+        finally:
+            conn.close()
+
+    # -- pledges --------------------------------------------------------
+    @staticmethod
+    def _pledge_values(pledge: Pledge, list_order: int) -> tuple:
+        return (
+            pledge.pledge_id,
+            pledge.person_id,
+            pledge.current_status,
+            list_order,
+            _json(pledge.to_dict()),
+        )
+
+    def save_pledges(self, pledges: list[Pledge]) -> None:
+        existing = {pledge.pledge_id: pledge for pledge in self.load_pledges()}
+        incoming = {pledge.pledge_id: pledge for pledge in pledges}
+        if len(incoming) != len(pledges):
+            raise ValueError("Duplicate pledge_id in pledge collection")
+        missing = sorted(set(existing) - set(incoming))
+        if missing:
+            raise ValueError(f"Pledge records cannot be removed: {', '.join(missing)}")
+        for pledge_id, old in existing.items():
+            _validate_pledge_update(old, incoming[pledge_id])
+
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM pledges")
+                conn.executemany(
+                    """
+                    INSERT INTO pledges(
+                        pledge_id, person_id, current_status, list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        self._pledge_values(pledge, index)
+                        for index, pledge in enumerate(pledges)
+                    ],
+                )
+        finally:
+            conn.close()
+
+    def load_pledges(self, *, person_id: str | None = None) -> list[Pledge]:
+        sql = "SELECT payload_json FROM pledges"
+        values: tuple[str, ...] = ()
+        if person_id:
+            sql += " WHERE person_id = ?"
+            values = (person_id,)
+        sql += " ORDER BY list_order, pledge_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [Pledge.from_dict(json.loads(row["payload_json"])) for row in rows]
+        finally:
+            conn.close()
+
+    def get_pledge(self, pledge_id: str) -> Pledge | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT payload_json FROM pledges WHERE pledge_id = ?", (pledge_id,)
+            ).fetchone()
+            return Pledge.from_dict(json.loads(row["payload_json"])) if row else None
+        finally:
+            conn.close()
+
+    def upsert_pledges(self, pledges: list[Pledge]) -> int:
+        if len({pledge.pledge_id for pledge in pledges}) != len(pledges):
+            raise ValueError("Duplicate pledge_id in pledge collection")
+        conn = self._connect()
+        try:
+            existing_rows = conn.execute(
+                "SELECT pledge_id, payload_json FROM pledges"
+            ).fetchall()
+            existing = {
+                row["pledge_id"]: Pledge.from_dict(json.loads(row["payload_json"]))
+                for row in existing_rows
+            }
+            known = dict(existing)
+            for pledge in pledges:
+                old = known.get(pledge.pledge_id)
+                if old:
+                    _validate_pledge_update(old, pledge)
+                known[pledge.pledge_id] = pledge
+
+            with conn:
+                before = len(existing)
+                max_order = conn.execute(
+                    "SELECT COALESCE(MAX(list_order), -1) FROM pledges"
+                ).fetchone()[0]
+                next_order = max_order + 1
+                for pledge in pledges:
+                    old = existing.get(pledge.pledge_id)
+                    list_order = (
+                        conn.execute(
+                            "SELECT list_order FROM pledges WHERE pledge_id = ?",
+                            (pledge.pledge_id,),
+                        ).fetchone()[0]
+                        if old
+                        else next_order
+                    )
+                    if not old:
+                        next_order += 1
+                    conn.execute(
+                        """
+                        INSERT INTO pledges(
+                            pledge_id, person_id, current_status, list_order, payload_json
+                        ) VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(pledge_id) DO UPDATE SET
+                            current_status = excluded.current_status,
+                            payload_json = excluded.payload_json
+                        """,
+                        self._pledge_values(pledge, list_order),
+                    )
+                after = conn.execute("SELECT COUNT(*) FROM pledges").fetchone()[0]
+            return after - before
         finally:
             conn.close()
 

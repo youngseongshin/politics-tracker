@@ -50,6 +50,7 @@ jobs:
           politics-tracker fetch-votes --era 22 --year "$collection_year" --limit 20
           politics-tracker link-bills --backend rules
           politics-tracker compute-consistency
+          politics-tracker pledge import data/pledges
 
       - name: Build static site from the real-data store
         run: politics-tracker build-site --out site_out

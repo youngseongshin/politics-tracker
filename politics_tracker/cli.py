@@ -21,9 +21,11 @@ from .enrich.topics import TOPICS, classify_rules
 from .matching import match_utterances
 from .models import (
     Person,
+    Pledge,
     ReviewItem,
     Stance,
     UtteranceBillLink,
+    pledge_id_for,
     review_id_for,
 )
 from .site.build import build_site
@@ -438,6 +440,127 @@ def cmd_compute_consistency(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pledge_import(args: argparse.Namespace) -> int:
+    from .pledges import load_pledge_path
+
+    store = SqliteStore(args.db)
+    try:
+        pledges = load_pledge_path(args.path)
+    except (FileNotFoundError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    people = {person.person_id for person in store.load_people()}
+    unknown = sorted({pledge.person_id for pledge in pledges} - people)
+    if unknown:
+        print(f"명부에 없는 공약 인물 ID: {', '.join(unknown)}", file=sys.stderr)
+        return 1
+    merged = []
+    for pledge in pledges:
+        old = store.get_pledge(pledge.pledge_id)
+        if (
+            old
+            and (old.person_id, old.text, old.source, old.criteria)
+            == (pledge.person_id, pledge.text, pledge.source, pledge.criteria)
+            and old.status_history[: len(pledge.status_history)] == pledge.status_history
+        ):
+            merged.append(old)
+        else:
+            merged.append(pledge)
+    try:
+        added = store.upsert_pledges(merged)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"공약 {len(pledges)}건 읽음, 신규 {added}건 → {store.db_path}")
+    return 0
+
+
+def cmd_pledge_add(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    people = {person.person_id for person in store.load_people()}
+    if args.person_id not in people:
+        print(f"명부에 없는 인물 ID: {args.person_id}", file=sys.stderr)
+        return 1
+    pledge = Pledge(
+        pledge_id=pledge_id_for(args.person_id, args.text, args.source_url),
+        person_id=args.person_id,
+        text=args.text.strip(),
+        source={
+            "kind": args.source_kind,
+            "url": args.source_url,
+            "title": args.source_title,
+        },
+        criteria=args.criteria.strip(),
+        status_history=[
+            {
+                "status": args.status,
+                "decided_at": args.decided_at or _now_iso()[:10],
+                "evidence": [{"url": args.evidence, "note": args.note}],
+            }
+        ],
+    )
+    existing = store.get_pledge(pledge.pledge_id)
+    if existing:
+        same_registration = (
+            existing.person_id,
+            existing.text,
+            existing.source,
+            existing.criteria,
+            existing.status_history[0],
+        ) == (
+            pledge.person_id,
+            pledge.text,
+            pledge.source,
+            pledge.criteria,
+            pledge.status_history[0],
+        )
+        if not same_registration:
+            print("같은 ID의 등록된 공약과 입력 내용이 다릅니다.", file=sys.stderr)
+            return 1
+        print(f"공약 동일 레코드 확인: {pledge.pledge_id}")
+        return 0
+    try:
+        added = store.upsert_pledges([pledge])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    action = "등록" if added else "동일 레코드 확인"
+    print(f"공약 {action}: {pledge.pledge_id}")
+    return 0
+
+
+def cmd_pledge_set_status(args: argparse.Namespace) -> int:
+    store = SqliteStore(args.db)
+    pledge = store.get_pledge(args.pledge_id)
+    if pledge is None:
+        print(f"공약을 찾을 수 없습니다: {args.pledge_id}", file=sys.stderr)
+        return 1
+    try:
+        updated = pledge.with_status(
+            status=args.status,
+            decided_at=args.decided_at or _now_iso()[:10],
+            evidence=[{"url": args.evidence, "note": args.note}],
+        )
+        store.upsert_pledges([updated])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    action = "변경 없음" if updated is pledge else "상태 이력 추가"
+    print(f"공약 {action}: {pledge.pledge_id} · {updated.current_status}")
+    return 0
+
+
+def cmd_pledge_list(args: argparse.Namespace) -> int:
+    pledges = SqliteStore(args.db).load_pledges(person_id=args.person_id)
+    for pledge in pledges:
+        print(
+            f"{pledge.pledge_id}  {pledge.person_id}  "
+            f"{pledge.current_status}  {pledge.text}"
+        )
+    print(f"총 {len(pledges)}건")
+    return 0
+
+
 def cmd_verify_api(args: argparse.Namespace) -> int:
     """실제 API 키로 연결성·서비스 ID·필드 매핑을 점검한다. 로컬에서 실행."""
     from .sources.assembly_api import AssemblyAPIError, AssemblyOpenAPI, normalize_member
@@ -519,6 +642,7 @@ def cmd_build_site(args: argparse.Namespace) -> int:
         bills=store.load_bills(),
         votes=store.load_votes(),
         consistency_pairs=store.load_consistency_pairs(),
+        pledges=store.load_pledges(),
     )
     print(f"인물 페이지 {stats.people_pages}개, 발언 {stats.utterances_rendered}건 렌더링 "
           f"(미귀속 {stats.unmatched_utterances}건) -> {Path(args.out) / 'index.html'}")
@@ -541,6 +665,7 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     votes = source.load_votes()
     bill_links = source.load_bill_links()
     consistency_pairs = source.load_consistency_pairs()
+    pledges = source.load_pledges()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -550,11 +675,12 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     target.save_votes(votes)
     target.save_bill_links(bill_links)
     target.save_consistency_pairs(consistency_pairs)
+    target.save_pledges(pledges)
     print(
         f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
         f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
-        f"일치도 근거 {len(consistency_pairs)}쌍 → {target.db_path}"
+        f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건 → {target.db_path}"
     )
     return 0
 
@@ -569,6 +695,7 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     votes = source.load_votes()
     bill_links = source.load_bill_links()
     consistency_pairs = source.load_consistency_pairs()
+    pledges = source.load_pledges()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -578,11 +705,12 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     target.save_votes(votes)
     target.save_bill_links(bill_links)
     target.save_consistency_pairs(consistency_pairs)
+    target.save_pledges(pledges)
     print(
         f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
         f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
-        f"일치도 근거 {len(consistency_pairs)}쌍 → {target.root}"
+        f"일치도 근거 {len(consistency_pairs)}쌍, 공약 {len(pledges)}건 → {target.root}"
     )
     return 0
 
@@ -881,6 +1009,50 @@ def build_parser() -> argparse.ArgumentParser:
     consistency.add_argument("--axes", default="config/stance_axes.yaml")
     consistency.add_argument("--db", default=DEFAULT_DB_PATH)
     consistency.set_defaults(func=cmd_compute_consistency)
+
+    pledge = sub.add_parser("pledge", help="공식 출처 공약과 append-only 판정 이력 관리")
+    pledge_actions = pledge.add_subparsers(dest="pledge_command", required=True)
+
+    pledge_import = pledge_actions.add_parser("import", help="공약 YAML 파일 또는 디렉터리 적재")
+    pledge_import.add_argument("path", nargs="?", default="data/pledges")
+    pledge_import.add_argument("--db", default=DEFAULT_DB_PATH)
+    pledge_import.set_defaults(func=cmd_pledge_import)
+
+    pledge_add = pledge_actions.add_parser("add", help="근거와 최초 상태를 포함해 공약 등록")
+    pledge_add.add_argument("--person-id", required=True)
+    pledge_add.add_argument("--text", required=True, help="공약 원문")
+    pledge_add.add_argument("--source-url", required=True)
+    pledge_add.add_argument("--source-title", required=True)
+    pledge_add.add_argument("--source-kind", default="nec_pledge_book")
+    pledge_add.add_argument("--criteria", required=True, help="등록 후 바꿀 수 없는 이행 판정 기준")
+    pledge_add.add_argument(
+        "--status",
+        choices=["이행", "부분 이행", "미이행", "검증 불가"],
+        required=True,
+    )
+    pledge_add.add_argument("--evidence", required=True, help="최초 판정 근거 URL")
+    pledge_add.add_argument("--note", required=True, help="근거가 판정을 뒷받침하는 이유")
+    pledge_add.add_argument("--decided-at", default=None, help="판정일 YYYY-MM-DD")
+    pledge_add.add_argument("--db", default=DEFAULT_DB_PATH)
+    pledge_add.set_defaults(func=cmd_pledge_add)
+
+    pledge_status = pledge_actions.add_parser("set-status", help="공약 판정 이력 추가")
+    pledge_status.add_argument("pledge_id")
+    pledge_status.add_argument(
+        "--status",
+        choices=["이행", "부분 이행", "미이행", "검증 불가"],
+        required=True,
+    )
+    pledge_status.add_argument("--evidence", required=True, help="판정 근거 URL")
+    pledge_status.add_argument("--note", required=True)
+    pledge_status.add_argument("--decided-at", default=None, help="판정일 YYYY-MM-DD")
+    pledge_status.add_argument("--db", default=DEFAULT_DB_PATH)
+    pledge_status.set_defaults(func=cmd_pledge_set_status)
+
+    pledge_list = pledge_actions.add_parser("list", help="공약 목록")
+    pledge_list.add_argument("--person-id", default=None)
+    pledge_list.add_argument("--db", default=DEFAULT_DB_PATH)
+    pledge_list.set_defaults(func=cmd_pledge_list)
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")
