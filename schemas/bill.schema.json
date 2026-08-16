@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/bill.schema.json",
+  "title": "Bill",
+  "description": "국회 의안. 열린국회정보 원본 레코드를 보존한다.",
+  "type": "object",
+  "required": ["bill_id", "assembly_bill_no", "title", "proposed_at", "link_url", "raw"],
+  "properties": {
+    "bill_id": { "type": "string", "pattern": "^bill_" },
+    "assembly_bill_no": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "proposed_at": { "type": ["string", "null"], "format": "date" },
+    "link_url": { "type": "string", "minLength": 1 },
+    "raw": { "type": "object" }
+  },
+  "additionalProperties": false
+}

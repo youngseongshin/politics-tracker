@@ -11,7 +11,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .models import Person, ReviewItem, Stance, Utterance
+from .models import Bill, Person, ReviewItem, Stance, Utterance, Vote
 
 
 class Store:
@@ -24,6 +24,8 @@ class Store:
         self.utterances_path = self.root / "utterances.jsonl"
         self.reviews_path = self.root / "reviews.jsonl"
         self.stances_path = self.root / "stances.jsonl"
+        self.bills_path = self.root / "bills.jsonl"
+        self.votes_path = self.root / "votes.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -61,6 +63,19 @@ class Store:
 
     def load_stances(self) -> list[Stance]:
         return [Stance.from_dict(data) for data in _read_jsonl(self.stances_path)]
+
+    # -- bills and votes ------------------------------------------------
+    def save_bills(self, bills: list[Bill]) -> None:
+        _write_jsonl(self.bills_path, [bill.to_dict() for bill in bills])
+
+    def load_bills(self) -> list[Bill]:
+        return [Bill.from_dict(data) for data in _read_jsonl(self.bills_path)]
+
+    def save_votes(self, votes: list[Vote]) -> None:
+        _write_jsonl(self.votes_path, [vote.to_dict() for vote in votes])
+
+    def load_votes(self) -> list[Vote]:
+        return [Vote.from_dict(data) for data in _read_jsonl(self.votes_path)]
 
 
 _SQLITE_SCHEMA = """
@@ -103,6 +118,31 @@ CREATE INDEX IF NOT EXISTS idx_stances_person_axis
     ON stances(person_id, axis);
 CREATE INDEX IF NOT EXISTS idx_stances_utterance
     ON stances(utterance_id);
+
+CREATE TABLE IF NOT EXISTS bills (
+    bill_id TEXT PRIMARY KEY,
+    assembly_bill_no TEXT NOT NULL,
+    proposed_at TEXT,
+    list_order INTEGER NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bills_assembly_bill_no
+    ON bills(assembly_bill_no);
+
+CREATE TABLE IF NOT EXISTS votes (
+    vote_id TEXT PRIMARY KEY,
+    bill_id TEXT NOT NULL,
+    person_id TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('찬성', '반대', '기권', '불참')),
+    voted_at TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    list_order INTEGER NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_votes_bill ON votes(bill_id);
+CREATE INDEX IF NOT EXISTS idx_votes_person_voted_at ON votes(person_id, voted_at);
 
 CREATE TABLE IF NOT EXISTS reviews (
     review_id TEXT PRIMARY KEY,
@@ -414,6 +454,156 @@ class SqliteStore:
                     [self._stance_values(stance) for stance in stances],
                 )
             return len(desired - all_existing), len(existing_public - desired)
+        finally:
+            conn.close()
+
+    # -- bills ----------------------------------------------------------
+    @staticmethod
+    def _bill_values(bill: Bill, list_order: int) -> tuple:
+        return (
+            bill.bill_id,
+            bill.assembly_bill_no,
+            bill.proposed_at,
+            list_order,
+            _json(bill.to_dict()),
+        )
+
+    def save_bills(self, bills: list[Bill]) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM bills")
+                conn.executemany(
+                    """
+                    INSERT INTO bills(
+                        bill_id, assembly_bill_no, proposed_at, list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [self._bill_values(bill, index) for index, bill in enumerate(bills)],
+                )
+        finally:
+            conn.close()
+
+    def load_bills(self) -> list[Bill]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT payload_json FROM bills ORDER BY list_order, bill_id"
+            ).fetchall()
+            return [Bill.from_dict(json.loads(row["payload_json"])) for row in rows]
+        finally:
+            conn.close()
+
+    def upsert_bills(self, bills: list[Bill]) -> int:
+        conn = self._connect()
+        try:
+            with conn:
+                before = conn.execute("SELECT COUNT(*) FROM bills").fetchone()[0]
+                max_order = conn.execute(
+                    "SELECT COALESCE(MAX(list_order), -1) FROM bills"
+                ).fetchone()[0]
+                conn.executemany(
+                    """
+                    INSERT INTO bills(
+                        bill_id, assembly_bill_no, proposed_at, list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(bill_id) DO UPDATE SET
+                        assembly_bill_no = excluded.assembly_bill_no,
+                        proposed_at = excluded.proposed_at,
+                        payload_json = excluded.payload_json
+                    """,
+                    [
+                        self._bill_values(bill, max_order + index + 1)
+                        for index, bill in enumerate(bills)
+                    ],
+                )
+                after = conn.execute("SELECT COUNT(*) FROM bills").fetchone()[0]
+            return after - before
+        finally:
+            conn.close()
+
+    # -- votes ----------------------------------------------------------
+    @staticmethod
+    def _vote_values(vote: Vote, list_order: int) -> tuple:
+        return (
+            vote.vote_id,
+            vote.bill_id,
+            vote.person_id,
+            vote.decision,
+            vote.voted_at,
+            vote.source["url"],
+            list_order,
+            _json(vote.to_dict()),
+        )
+
+    def save_votes(self, votes: list[Vote]) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM votes")
+                conn.executemany(
+                    """
+                    INSERT INTO votes(
+                        vote_id, bill_id, person_id, decision, voted_at, source_url,
+                        list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [self._vote_values(vote, index) for index, vote in enumerate(votes)],
+                )
+        finally:
+            conn.close()
+
+    def load_votes(
+        self, *, person_id: str | None = None, bill_id: str | None = None
+    ) -> list[Vote]:
+        where: list[str] = []
+        values: list[str] = []
+        if person_id:
+            where.append("person_id = ?")
+            values.append(person_id)
+        if bill_id:
+            where.append("bill_id = ?")
+            values.append(bill_id)
+        sql = "SELECT payload_json FROM votes"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY list_order, vote_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [Vote.from_dict(json.loads(row["payload_json"])) for row in rows]
+        finally:
+            conn.close()
+
+    def upsert_votes(self, votes: list[Vote]) -> int:
+        conn = self._connect()
+        try:
+            with conn:
+                before = conn.execute("SELECT COUNT(*) FROM votes").fetchone()[0]
+                max_order = conn.execute(
+                    "SELECT COALESCE(MAX(list_order), -1) FROM votes"
+                ).fetchone()[0]
+                conn.executemany(
+                    """
+                    INSERT INTO votes(
+                        vote_id, bill_id, person_id, decision, voted_at, source_url,
+                        list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(vote_id) DO UPDATE SET
+                        bill_id = excluded.bill_id,
+                        person_id = excluded.person_id,
+                        decision = excluded.decision,
+                        voted_at = excluded.voted_at,
+                        source_url = excluded.source_url,
+                        payload_json = excluded.payload_json
+                    """,
+                    [
+                        self._vote_values(vote, max_order + index + 1)
+                        for index, vote in enumerate(votes)
+                    ],
+                )
+                after = conn.execute("SELECT COUNT(*) FROM votes").fetchone()[0]
+            return after - before
         finally:
             conn.close()
 

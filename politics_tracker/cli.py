@@ -203,6 +203,37 @@ def cmd_fetch_minutes(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fetch_votes(args: argparse.Namespace) -> int:
+    from .sources.assembly_api import AssemblyOpenAPI
+    from .sources.votes import collect_votes
+
+    store = SqliteStore(args.db)
+    people = store.load_people()
+    if not people:
+        print("의원 명부가 없습니다. fetch-members를 먼저 실행하세요.", file=sys.stderr)
+        return 1
+    api = AssemblyOpenAPI(api_key=args.key)
+    result = collect_votes(
+        api,
+        people,
+        era=args.era,
+        limit=args.limit,
+        assembly_bill_id=args.bill_id,
+        year=args.year,
+        bill_service_id=args.bill_service_id,
+        vote_service_id=args.vote_service_id,
+    )
+    new_bills = store.upsert_bills(result.bills)
+    new_votes = store.upsert_votes(result.votes)
+    print(
+        f"표결 수집: 의안 {result.bills_with_votes}건(신규 {new_bills}), "
+        f"표결 {len(result.votes)}건(신규 {new_votes}), "
+        f"의원 미귀속 {result.unmatched_people}건, 미지원 표기 {result.unknown_decisions}건, "
+        f"의안 행 조회 {result.bills_scanned}건"
+    )
+    return 0
+
+
 def cmd_classify_topics(args: argparse.Namespace) -> int:
     store = SqliteStore(args.db)
     utterances = store.load_utterances()
@@ -425,14 +456,19 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     utterances = source.load_utterances()
     reviews = source.load_reviews()
     stances = source.load_stances()
+    bills = source.load_bills()
+    votes = source.load_votes()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
     target.save_reviews(reviews)
     target.save_stances(stances)
+    target.save_bills(bills)
+    target.save_votes(votes)
     print(
         f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
-        f"검수 {len(reviews)}건, 입장 {len(stances)}건 → {target.db_path}"
+        f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
+        f"표결 {len(votes)}건 → {target.db_path}"
     )
     return 0
 
@@ -443,14 +479,19 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     utterances = source.load_utterances()
     reviews = source.load_reviews()
     stances = source.load_stances()
+    bills = source.load_bills()
+    votes = source.load_votes()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
     target.save_reviews(reviews)
     target.save_stances(stances)
+    target.save_bills(bills)
+    target.save_votes(votes)
     print(
         f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
-        f"검수 {len(reviews)}건, 입장 {len(stances)}건 → {target.root}"
+        f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
+        f"표결 {len(votes)}건 → {target.root}"
     )
     return 0
 
@@ -655,6 +696,19 @@ def build_parser() -> argparse.ArgumentParser:
     fm.add_argument("--snapshot-dir", default="data/raw/minutes", help="원문 스냅샷 보관 경로")
     fm.add_argument("--db", default=DEFAULT_DB_PATH)
     fm.set_defaults(func=cmd_fetch_minutes)
+
+    from .sources.votes import DEFAULT_BILL_SERVICE_ID, DEFAULT_VOTE_SERVICE_ID
+
+    fv = sub.add_parser("fetch-votes", help="열린국회정보에서 의안과 본회의 표결 수집")
+    fv.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")
+    fv.add_argument("--era", default="22", help="국회 대수 (기본: 22)")
+    fv.add_argument("--year", default=None, help="본회의 처리 연도 필터")
+    fv.add_argument("--bill-id", default=None, help="열린국회정보 BILL_ID 한 건만 수집")
+    fv.add_argument("--limit", type=int, default=20, help="표결이 있는 의안 최대 건수")
+    fv.add_argument("--bill-service-id", default=DEFAULT_BILL_SERVICE_ID)
+    fv.add_argument("--vote-service-id", default=DEFAULT_VOTE_SERVICE_ID)
+    fv.add_argument("--db", default=DEFAULT_DB_PATH)
+    fv.set_defaults(func=cmd_fetch_votes)
 
     c = sub.add_parser("classify-topics", help="저장소의 발언에 주제 태그 부여")
     c.add_argument("--backend", choices=["rules", "claude"], default="rules",

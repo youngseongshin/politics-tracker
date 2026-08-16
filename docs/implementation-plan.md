@@ -26,7 +26,7 @@
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
 | `politics-tracker extract-stances` | 정책 축 입장 추출 | rules·Claude 페이크·인용구 가드 동작 |
-| `pytest` | 테스트 58건 | 전부 통과 |
+| `pytest` | 테스트 63건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -43,7 +43,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     58건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     63건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -419,6 +419,10 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 - T5.1 표결 수집: 본회의 표결 데이터셋의 서비스 ID를 T1.1과 같은 방식으로 확정하고
   `fetch-votes` 명령을 만든다. bill과 vote 레코드(§3.3)로 정규화하고 raw를 보존한다.
   의원 매칭은 API의 인물 코드를 우선 쓰고, 이름 매칭은 동명이인 보류 원칙을 따른다.
+  **완료(2026-08-16):** 의안 `nzmimeepazxkubdpn`, 표결 `nojepdqqaweusdfbi`를 실측해
+  `docs/api-notes.md`에 기록했다. `fetch-votes`는 기본 20개 의안으로 호출량을 제한하고
+  특정 `BILL_ID` 재현 경로를 제공한다. 실표결 294행 중 현역 명부 코드가 일치한 284행을
+  저장하고 10행은 미귀속했다. 같은 입력 재실행의 신규 의안·표결은 모두 0건이었다.
 - T5.2 발언·의안 연결: 1차 규칙 기반(발언 텍스트에 의안명 또는 의안번호가 문자열로
   포함되면 `method: rule:title_match`, confidence 1.0). 2차 LLM 후보(의안명 유사
   언급)는 `method: llm:candidate`로 만들고 전건 검수 큐를 거친다.

@@ -52,6 +52,9 @@ politics-tracker parse-minutes ./minutes/2026-07-15-plenary.txt \
   --session "제418회 국회(정기회) 제3차 본회의" \
   --source-url "https://likms.assembly.go.kr/record/..."
 
+# 2-c. 최근 본회의 표결 20개 의안 수집. 특정 의안은 --bill-id로 재현
+politics-tracker fetch-votes --era 22 --limit 20
+
 # 3. 주제 분류 — 기본은 키워드 규칙(오프라인·결정적)
 politics-tracker classify-topics
 # LLM 백엔드 (pip install -e ".[llm]" + ANTHROPIC_API_KEY 필요, 저신뢰는 보류 처리)

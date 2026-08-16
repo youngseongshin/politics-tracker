@@ -91,3 +91,21 @@ SHA-256 앞 12자리로 결정해 재실행해도 동일하다.
 `VCONFDETAIL`은 `CONF_ID`를 받아 회기, 차수, 회의일자, 위원회명과 `DOWN_URL`을
 반환한다. 목록 API에 필드가 없을 때 보완용으로 쓸 수 있으나 현재 본회의·위원회
 기본 수집에는 추가 호출하지 않는다.
+
+## 6. 의안과 본회의 표결
+
+| 항목 | 의안 | 국회의원 본회의 표결 |
+|---|---|---|
+| 서비스 ID | `nzmimeepazxkubdpn` | `nojepdqqaweusdfbi` |
+| 요청 주소 | `https://open.assembly.go.kr/portal/openapi/nzmimeepazxkubdpn` | `https://open.assembly.go.kr/portal/openapi/nojepdqqaweusdfbi` |
+| 필수 필터 | `AGE` | `AGE`, `BILL_ID` |
+
+의안 주요 필드는 `BILL_ID`, `BILL_NO`, `BILL_NAME`, `PROPOSE_DT`, `PROC_DT`,
+`PROC_RESULT`, `DETAIL_LINK`다. 표결 주요 필드는 `MONA_CD`, `HG_NM`,
+`VOTE_DATE`, `RESULT_VOTE_MOD`, `BILL_ID`, `BILL_NO`, `BILL_URL`이다.
+
+2026-08-16에 의안번호 2218438의 수정가결 표결을 실측했다. API는 294행을 반환했고
+표기는 찬성 153, 기권 11, 불참 130이었다. 현재 의원 명부의 `MONA_CD`와 일치한
+284행만 저장했으며, 현재 명부에 없는 코드 10행은 이름으로 추정하지 않고 미귀속했다.
+표결 시각은 의원별로 1초 정도 차이가 있으므로 공개 모델의 `voted_at`은 본회의 날짜로
+정규화하고 API 원문 시각은 `raw.VOTE_DATE`에 보존한다.

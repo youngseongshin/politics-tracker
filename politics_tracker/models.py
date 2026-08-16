@@ -193,6 +193,81 @@ def stance_id_for(utterance_id: str, axis: str, prompt_version: str) -> str:
     return "stance_" + hashlib.sha256(canonical).hexdigest()[:16]
 
 
+@dataclass
+class Bill:
+    bill_id: str
+    assembly_bill_no: str
+    title: str
+    proposed_at: str | None
+    link_url: str
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.bill_id.startswith("bill_"):
+            raise ValueError("Bill.bill_id must start with bill_")
+        if not self.assembly_bill_no or not self.title or not self.link_url:
+            raise ValueError("Bill requires assembly_bill_no, title, and link_url")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Bill":
+        return cls(
+            bill_id=data["bill_id"],
+            assembly_bill_no=data["assembly_bill_no"],
+            title=data["title"],
+            proposed_at=data.get("proposed_at"),
+            link_url=data["link_url"],
+            raw=dict(data.get("raw") or {}),
+        )
+
+
+@dataclass
+class Vote:
+    vote_id: str
+    bill_id: str
+    person_id: str
+    decision: str
+    voted_at: str
+    source: dict[str, Any]
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.vote_id.startswith("vote_"):
+            raise ValueError("Vote.vote_id must start with vote_")
+        if not self.bill_id.startswith("bill_"):
+            raise ValueError("Vote.bill_id must start with bill_")
+        if self.decision not in {"찬성", "반대", "기권", "불참"}:
+            raise ValueError(f"Invalid vote decision: {self.decision}")
+        if not self.source or not self.source.get("url"):
+            raise ValueError("Vote.source.url is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Vote":
+        return cls(
+            vote_id=data["vote_id"],
+            bill_id=data["bill_id"],
+            person_id=data["person_id"],
+            decision=data["decision"],
+            voted_at=data["voted_at"],
+            source=dict(data.get("source") or {}),
+            raw=dict(data.get("raw") or {}),
+        )
+
+
+def bill_id_for(assembly_bill_id: str) -> str:
+    return "bill_" + hashlib.sha256(assembly_bill_id.encode("utf-8")).hexdigest()[:16]
+
+
+def vote_id_for(bill_id: str, person_id: str, voted_at: str) -> str:
+    canonical = f"{bill_id}\0{person_id}\0{voted_at}".encode("utf-8")
+    return "vote_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:
     """회의록(출처)과 날짜, 순서로 결정되는 안정적 ID. 재수집해도 같은 ID가 나온다."""
     h = hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:8]

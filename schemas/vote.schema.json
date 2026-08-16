@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/vote.schema.json",
+  "title": "Vote",
+  "description": "국회의원 본회의 표결. 정규화 전 표기는 raw에 보존한다.",
+  "type": "object",
+  "required": ["vote_id", "bill_id", "person_id", "decision", "voted_at", "source", "raw"],
+  "properties": {
+    "vote_id": { "type": "string", "pattern": "^vote_" },
+    "bill_id": { "type": "string", "pattern": "^bill_" },
+    "person_id": { "type": "string", "minLength": 1 },
+    "decision": { "type": "string", "enum": ["찬성", "반대", "기권", "불참"] },
+    "voted_at": { "type": "string", "format": "date" },
+    "source": {
+      "type": "object",
+      "required": ["kind", "url"],
+      "properties": {
+        "kind": { "const": "assembly_vote_api" },
+        "url": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "raw": { "type": "object" }
+  },
+  "additionalProperties": false
+}
