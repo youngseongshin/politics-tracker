@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .models import (
     Bill,
+    ConsistencyPair,
     Person,
     ReviewItem,
     Stance,
@@ -35,6 +36,7 @@ class Store:
         self.bills_path = self.root / "bills.jsonl"
         self.votes_path = self.root / "votes.jsonl"
         self.bill_links_path = self.root / "utterance_bill_links.jsonl"
+        self.consistency_pairs_path = self.root / "consistency_pairs.jsonl"
 
     # -- people ---------------------------------------------------------
     def save_people(self, people: list[Person]) -> None:
@@ -93,6 +95,17 @@ class Store:
         return [
             UtteranceBillLink.from_dict(data)
             for data in _read_jsonl(self.bill_links_path)
+        ]
+
+    def save_consistency_pairs(self, pairs: list[ConsistencyPair]) -> None:
+        _write_jsonl(
+            self.consistency_pairs_path, [pair.to_dict() for pair in pairs]
+        )
+
+    def load_consistency_pairs(self) -> list[ConsistencyPair]:
+        return [
+            ConsistencyPair.from_dict(data)
+            for data in _read_jsonl(self.consistency_pairs_path)
         ]
 
 
@@ -175,6 +188,19 @@ CREATE TABLE IF NOT EXISTS utterance_bill_links (
 
 CREATE INDEX IF NOT EXISTS idx_bill_links_utterance ON utterance_bill_links(utterance_id);
 CREATE INDEX IF NOT EXISTS idx_bill_links_bill ON utterance_bill_links(bill_id);
+
+CREATE TABLE IF NOT EXISTS consistency_pairs (
+    consistency_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL,
+    bill_id TEXT NOT NULL,
+    utterance_id TEXT NOT NULL,
+    consistent INTEGER NOT NULL CHECK (consistent IN (0, 1)),
+    list_order INTEGER NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
+);
+
+CREATE INDEX IF NOT EXISTS idx_consistency_person ON consistency_pairs(person_id);
+CREATE INDEX IF NOT EXISTS idx_consistency_bill ON consistency_pairs(bill_id);
 
 CREATE TABLE IF NOT EXISTS reviews (
     review_id TEXT PRIMARY KEY,
@@ -738,6 +764,54 @@ class SqliteStore:
                     "SELECT COUNT(*) FROM utterance_bill_links"
                 ).fetchone()[0]
             return after - before
+        finally:
+            conn.close()
+
+    # -- consistency pairs ---------------------------------------------
+    def save_consistency_pairs(self, pairs: list[ConsistencyPair]) -> None:
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute("DELETE FROM consistency_pairs")
+                conn.executemany(
+                    """
+                    INSERT INTO consistency_pairs(
+                        consistency_id, person_id, bill_id, utterance_id,
+                        consistent, list_order, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            pair.consistency_id,
+                            pair.person_id,
+                            pair.bill_id,
+                            pair.utterance_id,
+                            int(pair.consistent),
+                            index,
+                            _json(pair.to_dict()),
+                        )
+                        for index, pair in enumerate(pairs)
+                    ],
+                )
+        finally:
+            conn.close()
+
+    def load_consistency_pairs(
+        self, *, person_id: str | None = None
+    ) -> list[ConsistencyPair]:
+        sql = "SELECT payload_json FROM consistency_pairs"
+        values: tuple[str, ...] = ()
+        if person_id:
+            sql += " WHERE person_id = ?"
+            values = (person_id,)
+        sql += " ORDER BY list_order, consistency_id"
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, values).fetchall()
+            return [
+                ConsistencyPair.from_dict(json.loads(row["payload_json"]))
+                for row in rows
+            ]
         finally:
             conn.close()
 

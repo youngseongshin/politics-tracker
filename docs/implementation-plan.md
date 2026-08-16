@@ -26,7 +26,7 @@
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
 | `politics-tracker review` | 저신뢰 검수 목록·상세·승인·기각 | SQLite 큐와 사이트 반영 흐름 동작 |
 | `politics-tracker extract-stances` | 정책 축 입장 추출 | rules·Claude 페이크·인용구 가드 동작 |
-| `pytest` | 테스트 67건 | 전부 통과 |
+| `pytest` | 테스트 70건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -43,7 +43,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     67건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     70건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -419,7 +419,7 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
 - T5.1 표결 수집: 본회의 표결 데이터셋의 서비스 ID를 T1.1과 같은 방식으로 확정하고
   `fetch-votes` 명령을 만든다. bill과 vote 레코드(§3.3)로 정규화하고 raw를 보존한다.
   의원 매칭은 API의 인물 코드를 우선 쓰고, 이름 매칭은 동명이인 보류 원칙을 따른다.
-  **완료(2026-08-16):** 의안 `nzmimeepazxkubdpn`, 표결 `nojepdqqaweusdfbi`를 실측해
+  **완료(2026-08-16):** 처리의안 `nzpltgfqabtcpsmai`, 표결 `nojepdqqaweusdfbi`를 실측해
   `docs/api-notes.md`에 기록했다. `fetch-votes`는 기본 20개 의안으로 호출량을 제한하고
   특정 `BILL_ID` 재현 경로를 제공한다. 실표결 294행 중 현역 명부 코드가 일치한 284행을
   저장하고 10행은 미귀속했다. 같은 입력 재실행의 신규 의안·표결은 모두 0건이었다.
@@ -436,6 +436,10 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
   0.85 이상, 그리고 발언이 표결 이전이다. 방향 규칙: value 부호가 양이면 해당
   의안 찬성 입장으로 본다는 매핑을 축 정의에 명시한다(축마다 `bill_direction` 필드).
   결과는 인물별 `일치 n건 / 판정 가능 m건`으로 저장하고 비율은 사이트에서 계산한다.
+  **완료(2026-08-16):** 축 설정에 양·음 방향의 기대 표결을 명시하고
+  `consistency_pair` 스키마와 `compute-consistency`를 추가했다. 같은 날 발언은 표결
+  전후 시각을 추정하지 않고 제외한다. 실데이터에서는 김승원의 2026-07-30 형사소송법
+  발언과 2026-07-31 찬성 표결 한 쌍이 판정 가능·일치로 계산됐으며 재실행 결과가 같았다.
 - T5.4 사이트: 인물 페이지에 말-표 기록 섹션. 표(의안, 발언 입장, 표결, 일치 여부)와
   각 행의 근거 링크. 집계 숫자는 반드시 목록 전체와 함께 표시한다.
 - 완료 기준: 임의 인물에서 지표 → 근거 쌍 목록 → 발언 원문/표결 원문까지 끊김 없이

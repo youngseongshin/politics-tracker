@@ -139,6 +139,7 @@ class StanceAxis:
     negative_pole: str
     positive_pole: str
     topic_keys: tuple[str, ...]
+    bill_direction: dict[str, str]
     notes: str
 
 
@@ -163,6 +164,16 @@ def load_stance_axes(path: str | Path = DEFAULT_AXES_PATH) -> list[StanceAxis]:
         missing = [field for field in required_text if not str(item.get(field, "")).strip()]
         if missing:
             raise ValueError(f"missing stance axis fields for {key}: {missing}")
+        bill_direction = item.get("bill_direction")
+        if (
+            not isinstance(bill_direction, dict)
+            or set(bill_direction) != {"positive", "negative"}
+            or any(
+                decision not in {"찬성", "반대"}
+                for decision in bill_direction.values()
+            )
+        ):
+            raise ValueError(f"invalid bill_direction for {key}")
         axes.append(
             StanceAxis(
                 key=key,
@@ -170,6 +181,7 @@ def load_stance_axes(path: str | Path = DEFAULT_AXES_PATH) -> list[StanceAxis]:
                 negative_pole=str(item["negative_pole"]).strip(),
                 positive_pole=str(item["positive_pole"]).strip(),
                 topic_keys=topic_keys,
+                bill_direction=dict(bill_direction),
                 notes=str(item["notes"]).strip(),
             )
         )

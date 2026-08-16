@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://politics-tracker.dev/schemas/consistency_pair.schema.json",
+  "title": "ConsistencyPair",
+  "description": "판정 가능 조건을 통과한 발언 입장과 본회의 표결의 근거 쌍.",
+  "type": "object",
+  "required": [
+    "consistency_id", "person_id", "bill_id", "utterance_id", "stance_id",
+    "vote_id", "axis", "stance_value", "expected_decision", "vote_decision",
+    "consistent", "formula_version"
+  ],
+  "properties": {
+    "consistency_id": { "type": "string", "pattern": "^cons_" },
+    "person_id": { "type": "string", "minLength": 1 },
+    "bill_id": { "type": "string", "pattern": "^bill_" },
+    "utterance_id": { "type": "string", "minLength": 1 },
+    "stance_id": { "type": "string", "pattern": "^stance_" },
+    "vote_id": { "type": "string", "pattern": "^vote_" },
+    "axis": { "type": "string", "minLength": 1 },
+    "stance_value": { "type": "number", "minimum": -1, "maximum": 1 },
+    "expected_decision": { "type": "string", "enum": ["찬성", "반대"] },
+    "vote_decision": { "type": "string", "enum": ["찬성", "반대", "기권", "불참"] },
+    "consistent": { "type": "boolean" },
+    "formula_version": { "const": "consistency_v1" }
+  },
+  "additionalProperties": false
+}

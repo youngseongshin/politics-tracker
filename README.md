@@ -68,6 +68,7 @@ politics-tracker detect-stance-changes
 # 4-b. 발언과 의안 연결. Claude 후보는 전건 검수 큐로 이동
 politics-tracker link-bills --backend rules
 # politics-tracker link-bills --backend claude
+politics-tracker compute-consistency
 
 # 5. 정적 사이트 생성
 politics-tracker build-site --out ./site_out

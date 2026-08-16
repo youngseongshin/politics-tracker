@@ -411,6 +411,33 @@ def cmd_link_bills(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compute_consistency(args: argparse.Namespace) -> int:
+    from .analytics.consistency import (
+        compute_consistency_pairs,
+        consistency_summaries,
+    )
+    from .enrich.stances import load_stance_axes
+
+    store = SqliteStore(args.db)
+    pairs = compute_consistency_pairs(
+        store.load_stances(published_only=True),
+        store.load_utterances(),
+        store.load_bills(),
+        store.load_votes(),
+        store.load_bill_links(usable_only=True),
+        load_stance_axes(args.axes),
+    )
+    store.save_consistency_pairs(pairs)
+    summaries = consistency_summaries(pairs)
+    print(f"말·표 판정 가능 근거 {len(pairs)}쌍, 인물 {len(summaries)}명")
+    for person_id, summary in sorted(summaries.items()):
+        print(
+            f"{person_id}: 일치 {summary['consistent']}건 / "
+            f"판정 가능 {summary['eligible']}건"
+        )
+    return 0
+
+
 def cmd_verify_api(args: argparse.Namespace) -> int:
     """실제 API 키로 연결성·서비스 ID·필드 매핑을 점검한다. 로컬에서 실행."""
     from .sources.assembly_api import AssemblyAPIError, AssemblyOpenAPI, normalize_member
@@ -510,6 +537,7 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     bills = source.load_bills()
     votes = source.load_votes()
     bill_links = source.load_bill_links()
+    consistency_pairs = source.load_consistency_pairs()
     target = SqliteStore(args.db)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -518,10 +546,12 @@ def cmd_migrate_store(args: argparse.Namespace) -> int:
     target.save_bills(bills)
     target.save_votes(votes)
     target.save_bill_links(bill_links)
+    target.save_consistency_pairs(consistency_pairs)
     print(
         f"JSONL → SQLite 이관: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
-        f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건 → {target.db_path}"
+        f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
+        f"일치도 근거 {len(consistency_pairs)}쌍 → {target.db_path}"
     )
     return 0
 
@@ -535,6 +565,7 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     bills = source.load_bills()
     votes = source.load_votes()
     bill_links = source.load_bill_links()
+    consistency_pairs = source.load_consistency_pairs()
     target = Store(args.out)
     target.save_people(people)
     target.save_utterances(utterances)
@@ -543,10 +574,12 @@ def cmd_export_jsonl(args: argparse.Namespace) -> int:
     target.save_bills(bills)
     target.save_votes(votes)
     target.save_bill_links(bill_links)
+    target.save_consistency_pairs(consistency_pairs)
     print(
         f"SQLite → JSONL 내보내기: 인물 {len(people)}명, 발언 {len(utterances)}건, "
         f"검수 {len(reviews)}건, 입장 {len(stances)}건, 의안 {len(bills)}건, "
-        f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건 → {target.root}"
+        f"표결 {len(votes)}건, 발언·의안 연결 {len(bill_links)}건, "
+        f"일치도 근거 {len(consistency_pairs)}쌍 → {target.root}"
     )
     return 0
 
@@ -838,6 +871,13 @@ def build_parser() -> argparse.ArgumentParser:
     bill_links.add_argument("--candidate-limit", type=int, default=500)
     bill_links.add_argument("--db", default=DEFAULT_DB_PATH)
     bill_links.set_defaults(func=cmd_link_bills)
+
+    consistency = sub.add_parser(
+        "compute-consistency", help="판정 가능한 발언 입장·표결 근거 쌍 계산"
+    )
+    consistency.add_argument("--axes", default="config/stance_axes.yaml")
+    consistency.add_argument("--db", default=DEFAULT_DB_PATH)
+    consistency.set_defaults(func=cmd_compute_consistency)
 
     v = sub.add_parser("verify-api", help="실제 API 키로 접속·서비스ID·필드매핑 검증 (로컬 실행)")
     v.add_argument("--key", default=None, help="API 키 (기본: ASSEMBLY_API_KEY 환경변수)")

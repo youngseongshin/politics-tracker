@@ -94,14 +94,15 @@ SHA-256 앞 12자리로 결정해 재실행해도 동일하다.
 
 ## 6. 의안과 본회의 표결
 
-| 항목 | 의안 | 국회의원 본회의 표결 |
+| 항목 | 처리의안 | 국회의원 본회의 표결 |
 |---|---|---|
-| 서비스 ID | `nzmimeepazxkubdpn` | `nojepdqqaweusdfbi` |
-| 요청 주소 | `https://open.assembly.go.kr/portal/openapi/nzmimeepazxkubdpn` | `https://open.assembly.go.kr/portal/openapi/nojepdqqaweusdfbi` |
+| 서비스 ID | `nzpltgfqabtcpsmai` | `nojepdqqaweusdfbi` |
+| 요청 주소 | `https://open.assembly.go.kr/portal/openapi/nzpltgfqabtcpsmai` | `https://open.assembly.go.kr/portal/openapi/nojepdqqaweusdfbi` |
 | 필수 필터 | `AGE` | `AGE`, `BILL_ID` |
 
-의안 주요 필드는 `BILL_ID`, `BILL_NO`, `BILL_NAME`, `PROPOSE_DT`, `PROC_DT`,
-`PROC_RESULT`, `DETAIL_LINK`다. 표결 주요 필드는 `MONA_CD`, `HG_NM`,
+처리의안 주요 필드는 `BILL_ID`, `BILL_NO`, `BILL_NAME`, `PROPOSE_DT`, `PROC_DT`,
+`PROC_RESULT_CD`, `LINK_URL`이다. 의원 발의법률안 `nzmimeepazxkubdpn`만 사용하면
+위원회 대안이 빠지므로 운영 기본값으로 쓰지 않는다. 표결 주요 필드는 `MONA_CD`, `HG_NM`,
 `VOTE_DATE`, `RESULT_VOTE_MOD`, `BILL_ID`, `BILL_NO`, `BILL_URL`이다.
 
 2026-08-16에 의안번호 2218438의 수정가결 표결을 실측했다. API는 294행을 반환했고
@@ -109,3 +110,8 @@ SHA-256 앞 12자리로 결정해 재실행해도 동일하다.
 284행만 저장했으며, 현재 명부에 없는 코드 10행은 이름으로 추정하지 않고 미귀속했다.
 표결 시각은 의원별로 1초 정도 차이가 있으므로 공개 모델의 `voted_at`은 본회의 날짜로
 정규화하고 API 원문 시각은 `raw.VOTE_DATE`에 보존한다.
+
+처리의안 서비스에서 위원회 대안인 의안번호 2220257
+`형사소송법 일부개정법률안(대안)`을 조회한 뒤 같은 `BILL_ID`로 표결을 수집하는 흐름도
+확인했다. 회의록의 정확한 의안명과 연결되어 2026-07-30 발언과 2026-07-31 표결의
+판정 가능 근거 쌍 한 건을 재현했다.

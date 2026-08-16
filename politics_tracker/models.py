@@ -310,6 +310,57 @@ def bill_link_id_for(utterance_id: str, bill_id: str, method: str) -> str:
     return "ubl_" + hashlib.sha256(canonical).hexdigest()[:16]
 
 
+@dataclass
+class ConsistencyPair:
+    consistency_id: str
+    person_id: str
+    bill_id: str
+    utterance_id: str
+    stance_id: str
+    vote_id: str
+    axis: str
+    stance_value: float
+    expected_decision: str
+    vote_decision: str
+    consistent: bool
+    formula_version: str = "consistency_v1"
+
+    def __post_init__(self) -> None:
+        if not self.consistency_id.startswith("cons_"):
+            raise ValueError("ConsistencyPair.consistency_id must start with cons_")
+        if self.expected_decision not in {"찬성", "반대"}:
+            raise ValueError("ConsistencyPair.expected_decision is invalid")
+        if self.vote_decision not in {"찬성", "반대", "기권", "불참"}:
+            raise ValueError("ConsistencyPair.vote_decision is invalid")
+        if self.formula_version != "consistency_v1":
+            raise ValueError("Unsupported consistency formula version")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ConsistencyPair":
+        return cls(
+            consistency_id=data["consistency_id"],
+            person_id=data["person_id"],
+            bill_id=data["bill_id"],
+            utterance_id=data["utterance_id"],
+            stance_id=data["stance_id"],
+            vote_id=data["vote_id"],
+            axis=data["axis"],
+            stance_value=float(data["stance_value"]),
+            expected_decision=data["expected_decision"],
+            vote_decision=data["vote_decision"],
+            consistent=bool(data["consistent"]),
+            formula_version=data.get("formula_version", "consistency_v1"),
+        )
+
+
+def consistency_id_for(stance_id: str, vote_id: str, formula_version: str) -> str:
+    canonical = f"{stance_id}\0{vote_id}\0{formula_version}".encode("utf-8")
+    return "cons_" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
 def utterance_id_for(spoken_at: str, source_url: str, order: int) -> str:
     """회의록(출처)과 날짜, 순서로 결정되는 안정적 ID. 재수집해도 같은 ID가 나온다."""
     h = hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:8]

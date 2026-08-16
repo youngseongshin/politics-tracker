@@ -10,7 +10,9 @@ from urllib.parse import urlsplit, urlunsplit
 from ..models import Bill, Person, Vote, bill_id_for, vote_id_for
 
 
-DEFAULT_BILL_SERVICE_ID = "nzmimeepazxkubdpn"
+# 처리의안은 의원 발의안뿐 아니라 위원회 대안까지 포함한다. 의원 발의법률안
+# ``nzmimeepazxkubdpn``은 보조 조회에만 사용한다.
+DEFAULT_BILL_SERVICE_ID = "nzpltgfqabtcpsmai"
 DEFAULT_VOTE_SERVICE_ID = "nojepdqqaweusdfbi"
 VOTED_RESULTS = {"원안가결", "수정가결", "부결", "가결"}
 
@@ -36,7 +38,9 @@ def normalize_bill(row: dict[str, Any]) -> Bill:
     external_id = str(row.get("BILL_ID") or "").strip()
     bill_no = str(row.get("BILL_NO") or "").strip()
     title = str(row.get("BILL_NAME") or "").strip()
-    link = str(row.get("DETAIL_LINK") or row.get("BILL_URL") or "").strip()
+    link = str(
+        row.get("LINK_URL") or row.get("DETAIL_LINK") or row.get("BILL_URL") or ""
+    ).strip()
     if not external_id or not bill_no or not title or not link:
         raise ValueError("bill row requires BILL_ID, BILL_NO, BILL_NAME, and DETAIL_LINK")
     proposed_at = str(row.get("PROPOSE_DT") or "").strip() or None
@@ -126,7 +130,8 @@ def collect_votes(
         scanned += 1
         if assembly_bill_id and str(row.get("BILL_ID")) != assembly_bill_id:
             continue
-        if not assembly_bill_id and row.get("PROC_RESULT") not in VOTED_RESULTS:
+        process_result = row.get("PROC_RESULT_CD") or row.get("PROC_RESULT")
+        if not assembly_bill_id and process_result not in VOTED_RESULTS:
             continue
         if year and not str(row.get("PROC_DT") or "").startswith(year):
             continue

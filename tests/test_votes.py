@@ -18,8 +18,8 @@ def _bill_row(**updates):
         "BILL_NAME": "세종특별자치시 설치 등에 관한 특별법 일부개정법률안",
         "PROPOSE_DT": "2026-04-01",
         "PROC_DT": "2026-04-23",
-        "PROC_RESULT": "수정가결",
-        "DETAIL_LINK": "http://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_TEST_1",
+        "PROC_RESULT_CD": "수정가결",
+        "LINK_URL": "http://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_TEST_1",
     }
     row.update(updates)
     return row
@@ -49,7 +49,7 @@ class FakeAPI:
                     _bill_row(
                         BILL_ID="PRC_NOT_VOTED",
                         BILL_NO="2200001",
-                        PROC_RESULT="대안반영폐기",
+                        PROC_RESULT_CD="대안반영폐기",
                     ),
                     _bill_row(),
                 ]
