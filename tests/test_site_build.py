@@ -27,6 +27,8 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
             text="공급 확대가 필요합니다.",
             source={"kind": "assembly_minutes", "url": "https://example.invalid/minutes/1",
                     "title": "가상 회의록"},
+            topics=["housing"],
+            topic_source="rules",
         ),
         Utterance(
             utterance_id="u3",
@@ -79,6 +81,13 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
     p2 = (tmp_path / "person" / "p2.html").read_text(encoding="utf-8")
     assert "아직 수록된 발언이 없습니다" in p2
     assert (tmp_path / "about.html").exists()
+    assert 'topic/housing.html' in index
+    housing = (tmp_path / "topic" / "housing.html").read_text(encoding="utf-8")
+    assert "부동산·주거" in housing
+    assert "공급 확대가 필요합니다." in housing
+    assert 'data-person-id="p1"' in housing
+    assert "person-filter" in housing
+    assert "person/p1.html#u1" in housing
     search_page = (tmp_path / "search.html").read_text(encoding="utf-8")
     assert "발언 검색" in search_page
     assert 'fetch("search/" + name)' in search_page

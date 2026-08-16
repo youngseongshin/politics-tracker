@@ -124,6 +124,35 @@ def _write_search_shards(
     return shard_names
 
 
+def _topic_rows(
+    people: list[Person], utterances: list[Utterance]
+) -> tuple[list[dict], dict[str, list[dict]]]:
+    people_by_id = {person.person_id: person for person in people}
+    by_topic: dict[str, list[dict]] = {key: [] for key in TOPIC_LABELS}
+    for utterance in utterances:
+        person = people_by_id.get(utterance.person_id or "")
+        if not person:
+            continue
+        row = {"utterance": utterance, "person": person}
+        for topic in utterance.topics:
+            if topic in by_topic:
+                by_topic[topic].append(row)
+    for rows in by_topic.values():
+        rows.sort(
+            key=lambda row: (
+                row["utterance"].spoken_at,
+                row["utterance"].source.get("url", ""),
+                -row["utterance"].order,
+            ),
+            reverse=True,
+        )
+    summaries = [
+        {"key": key, "label": label, "count": len(by_topic[key])}
+        for key, label in TOPIC_LABELS.items()
+    ]
+    return summaries, by_topic
+
+
 def build_site(people: list[Person], utterances: list[Utterance], out_dir: str | Path) -> BuildStats:
     out = Path(out_dir)
     (out / "person").mkdir(parents=True, exist_ok=True)
@@ -162,8 +191,13 @@ def build_site(people: list[Person], utterances: list[Utterance], out_dir: str |
         ),
         key=lambda r: (-r["count"], r["person"].name),
     )
+    topic_summaries, utterances_by_topic = _topic_rows(people, utterances)
     index_html = env.get_template("index.html").render(
-        root="", rows=index_rows, total_utterances=len(utterances), generated_at=generated_at
+        root="",
+        rows=index_rows,
+        topics=topic_summaries,
+        total_utterances=len(utterances),
+        generated_at=generated_at,
     )
     (out / "index.html").write_text(index_html, encoding="utf-8")
 
@@ -175,6 +209,24 @@ def build_site(people: list[Person], utterances: list[Utterance], out_dir: str |
         root="", search_shards=search_shards, generated_at=generated_at
     )
     (out / "search.html").write_text(search_html, encoding="utf-8")
+
+    topic_dir = out / "topic"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    topic_tpl = env.get_template("topic.html")
+    for topic in topic_summaries:
+        rows = utterances_by_topic[topic["key"]]
+        topic_people = sorted(
+            {row["person"].person_id: row["person"] for row in rows}.values(),
+            key=lambda person: person.name,
+        )
+        html = topic_tpl.render(
+            root="../",
+            topic=topic,
+            rows=rows,
+            people=topic_people,
+            generated_at=generated_at,
+        )
+        (topic_dir / f"{topic['key']}.html").write_text(html, encoding="utf-8")
 
     return BuildStats(
         people_pages=len(people),

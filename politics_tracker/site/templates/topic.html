@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.label }} · 발언록{% endblock %}
+{% block content %}
+<h1>{{ topic.label }}</h1>
+<p class="lead">이 주제로 분류된 발언 <span class="num">{{ topic.count }}</span>건을 최신순으로 표시합니다.</p>
+
+{% if people %}
+<div class="filter-row">
+  <label for="person-filter" class="muted">인물 필터</label><br>
+  <select id="person-filter">
+    <option value="">전체 인물</option>
+    {% for person in people %}<option value="{{ person.person_id }}">{{ person.name }}</option>{% endfor %}
+  </select>
+</div>
+{% endif %}
+
+<p id="topic-empty" class="notice"{% if rows %} hidden{% endif %}>조건에 맞는 발언이 없습니다.</p>
+<div id="topic-utterances">
+{% for row in rows %}
+  <article class="topic-utterance" data-person-id="{{ row.person.person_id }}">
+    <div class="meta">
+      <a href="../person/{{ row.person.person_id }}.html#{{ row.utterance.utterance_id }}">{{ row.person.name }} · <span class="num">{{ row.utterance.spoken_at }}</span></a>
+      {% if row.utterance.venue.committee %} · {{ row.utterance.venue.committee }}{% endif %}
+    </div>
+    <p class="speech">{{ row.utterance.text }}</p>
+    <div class="srcline">출처: <a href="{{ row.utterance.source.url }}" rel="noopener">{{ row.utterance.source.title or "회의록 원문" }}</a></div>
+  </article>
+{% endfor %}
+</div>
+
+{% if people %}
+<script>
+(function () {
+  "use strict";
+  var filter = document.getElementById("person-filter");
+  var empty = document.getElementById("topic-empty");
+  filter.addEventListener("change", function () {
+    var visible = 0;
+    document.querySelectorAll(".topic-utterance").forEach(function (item) {
+      var show = !filter.value || item.dataset.personId === filter.value;
+      item.hidden = !show;
+      if (show) visible += 1;
+    });
+    empty.hidden = visible !== 0;
+  });
+}());
+</script>
+{% endif %}
+{% endblock %}
