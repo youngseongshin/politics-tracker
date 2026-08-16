@@ -55,6 +55,14 @@
                           border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); }
   input[type="search"]:focus { outline: none; border-color: var(--accent); }
   input[type="search"]::placeholder { color: var(--muted); }
+  mark { background: #fff1a8; color: inherit; padding: 0 0.05em; }
+  .search-status { min-height: 1.6rem; margin: -0.8rem 0 0.8rem; }
+  .search-result { padding: 1.1rem 0 1.2rem; border-top: 1px solid var(--line); }
+  .search-result:first-child { border-top-color: var(--line-strong); }
+  .search-result .meta { color: var(--sub); font-size: 0.94rem; }
+  .search-result .meta a { color: var(--sub); text-decoration: underline;
+                           text-underline-offset: 2px; }
+  .search-result .snippet { margin: 0.35rem 0 0; white-space: pre-line; }
 
   /* 발언 타임라인: 날짜 아래 발언을 여백과 구분선으로 나눈다 */
   .day { margin: 2.4rem 0 0; padding-top: 1.1rem; border-top: 1px solid var(--line-strong);
@@ -93,7 +101,7 @@
 <header class="site">
   <div class="shell">
     <a class="brand" href="{{ root }}index.html">발언록</a>
-    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}about.html">소개</a></nav>
+    <nav><a href="{{ root }}index.html">인물</a><a href="{{ root }}search.html">발언 검색</a><a href="{{ root }}about.html">소개</a></nav>
   </div>
 </header>
 <main>

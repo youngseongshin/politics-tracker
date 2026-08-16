@@ -1,5 +1,8 @@
 from politics_tracker.matching import match_utterances
 from politics_tracker.models import Person, Utterance
+import json
+
+import politics_tracker.site.build as site_build_module
 from politics_tracker.site.build import build_site
 
 
@@ -76,3 +79,42 @@ def test_build_site_renders_person_timeline_with_source_links(tmp_path):
     p2 = (tmp_path / "person" / "p2.html").read_text(encoding="utf-8")
     assert "아직 수록된 발언이 없습니다" in p2
     assert (tmp_path / "about.html").exists()
+    search_page = (tmp_path / "search.html").read_text(encoding="utf-8")
+    assert "발언 검색" in search_page
+    assert 'fetch("search/" + name)' in search_page
+    shard = json.loads((tmp_path / "search" / "index-2026.json").read_text(encoding="utf-8"))
+    assert [row["utterance_id"] for row in shard] == ["u1", "u3"]
+    assert shard[0]["person_name"] == "이가상"
+    assert shard[0]["source_url"] == "https://example.invalid/minutes/1"
+
+
+def test_search_index_splits_into_half_year_shards_over_size_limit(tmp_path, monkeypatch):
+    person = Person(person_id="p1", name="이가상")
+    utterances = [
+        Utterance(
+            utterance_id="first-half",
+            speaker_name="이가상",
+            speaker_role="의원",
+            spoken_at="2026-03-01",
+            venue={"type": "assembly_plenary", "session": "회의"},
+            text="상반기 발언",
+            source={"kind": "assembly_minutes", "url": "https://example.invalid/first"},
+            person_id="p1",
+        ),
+        Utterance(
+            utterance_id="second-half",
+            speaker_name="이가상",
+            speaker_role="의원",
+            spoken_at="2026-09-01",
+            venue={"type": "assembly_plenary", "session": "회의"},
+            text="하반기 발언",
+            source={"kind": "assembly_minutes", "url": "https://example.invalid/second"},
+            person_id="p1",
+        ),
+    ]
+    monkeypatch.setattr(site_build_module, "_MAX_SEARCH_INDEX_BYTES", 1)
+    build_site([person], utterances, tmp_path)
+    assert sorted(path.name for path in (tmp_path / "search").glob("*.json")) == [
+        "index-2026-h1.json",
+        "index-2026-h2.json",
+    ]

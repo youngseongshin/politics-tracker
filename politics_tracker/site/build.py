@@ -7,6 +7,7 @@ SSG로 렌더 레이어만 교체한다 — 데이터 레이어(JSONL/스키마)
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +26,9 @@ class BuildStats:
     people_pages: int
     utterances_rendered: int
     unmatched_utterances: int
+
+
+_MAX_SEARCH_INDEX_BYTES = 5 * 1024 * 1024
 
 
 def _env() -> Environment:
@@ -61,6 +65,63 @@ def _timeline_groups(utterances: list[Utterance]) -> list[dict]:
             }
         )
     return ordered
+
+
+def _search_row(utterance: Utterance, person: Person) -> dict:
+    return {
+        "utterance_id": utterance.utterance_id,
+        "person_id": person.person_id,
+        "person_name": person.name,
+        "spoken_at": utterance.spoken_at,
+        "text": utterance.text,
+        "source_url": utterance.source["url"],
+        "source_title": utterance.source.get("title") or "회의록 원문",
+    }
+
+
+def _encoded_search_rows(rows: list[dict]) -> bytes:
+    return json.dumps(
+        rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _write_search_shards(
+    out: Path,
+    people: list[Person],
+    utterances: list[Utterance],
+) -> list[str]:
+    """연도별 검색 JSON을 쓰고 전체가 5MB를 넘으면 반기 단위로 나눈다."""
+    people_by_id = {person.person_id: person for person in people}
+    rows = [
+        _search_row(utterance, people_by_id[utterance.person_id])
+        for utterance in utterances
+        if utterance.person_id in people_by_id
+    ]
+    rows.sort(key=lambda row: (row["spoken_at"], row["utterance_id"]), reverse=True)
+    split_half_year = len(_encoded_search_rows(rows)) > _MAX_SEARCH_INDEX_BYTES
+
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        year = row["spoken_at"][:4]
+        key = year
+        if split_half_year:
+            month = int(row["spoken_at"][5:7])
+            key = f"{year}-h{1 if month <= 6 else 2}"
+        grouped[key].append(row)
+
+    search_dir = out / "search"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    for existing in search_dir.glob("index-*.json"):
+        existing.unlink()
+    shard_names: list[str] = []
+    for key in sorted(grouped, reverse=True):
+        name = f"index-{key}.json"
+        (search_dir / name).write_bytes(_encoded_search_rows(grouped[key]))
+        shard_names.append(name)
+    return shard_names
 
 
 def build_site(people: list[Person], utterances: list[Utterance], out_dir: str | Path) -> BuildStats:
@@ -108,6 +169,12 @@ def build_site(people: list[Person], utterances: list[Utterance], out_dir: str |
 
     about_html = env.get_template("about.html").render(root="", generated_at=generated_at)
     (out / "about.html").write_text(about_html, encoding="utf-8")
+
+    search_shards = _write_search_shards(out, people, utterances)
+    search_html = env.get_template("search.html").render(
+        root="", search_shards=search_shards, generated_at=generated_at
+    )
+    (out / "search.html").write_text(search_html, encoding="utf-8")
 
     return BuildStats(
         people_pages=len(people),

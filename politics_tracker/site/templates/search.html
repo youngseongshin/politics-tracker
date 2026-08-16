@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}발언 검색 · 발언록{% endblock %}
+{% block content %}
+<h1>발언 검색</h1>
+<p class="lead">두 글자 이상 입력하면 수록된 발언 전문을 최신 기록부터 찾습니다.</p>
+<input type="search" id="utterance-query" placeholder="발언 내용 검색" autocomplete="off"
+       aria-label="발언 내용 검색">
+<p id="search-status" class="search-status muted" aria-live="polite"></p>
+<div id="search-results"></div>
+
+<script>
+(function () {
+  "use strict";
+  var shardNames = {{ search_shards | tojson }};
+  var loaded = new Map();
+  var queryVersion = 0;
+  var input = document.getElementById("utterance-query");
+  var status = document.getElementById("search-status");
+  var results = document.getElementById("search-results");
+
+  function loadShard(name) {
+    if (!loaded.has(name)) {
+      loaded.set(name, fetch("search/" + name).then(function (response) {
+        if (!response.ok) throw new Error("검색 인덱스를 불러오지 못했습니다.");
+        return response.json();
+      }));
+    }
+    return loaded.get(name);
+  }
+
+  function snippet(text, query) {
+    var lower = text.toLocaleLowerCase("ko");
+    var index = lower.indexOf(query);
+    var start = Math.max(0, index - 70);
+    var end = Math.min(text.length, index + query.length + 110);
+    return {
+      before: (start ? "…" : "") + text.slice(start, index),
+      match: text.slice(index, index + query.length),
+      after: text.slice(index + query.length, end) + (end < text.length ? "…" : "")
+    };
+  }
+
+  function render(rows, query) {
+    results.replaceChildren();
+    rows.forEach(function (row) {
+      var item = document.createElement("article");
+      item.className = "search-result";
+
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      var permalink = document.createElement("a");
+      permalink.href = "person/" + encodeURIComponent(row.person_id) + ".html#" + encodeURIComponent(row.utterance_id);
+      permalink.textContent = row.person_name + " · " + row.spoken_at;
+      meta.appendChild(permalink);
+      meta.appendChild(document.createTextNode(" · "));
+      var source = document.createElement("a");
+      source.href = row.source_url;
+      source.rel = "noopener";
+      source.textContent = "출처: " + row.source_title;
+      meta.appendChild(source);
+
+      var parts = snippet(row.text, query);
+      var body = document.createElement("p");
+      body.className = "snippet";
+      body.appendChild(document.createTextNode(parts.before));
+      var mark = document.createElement("mark");
+      mark.textContent = parts.match;
+      body.appendChild(mark);
+      body.appendChild(document.createTextNode(parts.after));
+      item.appendChild(meta);
+      item.appendChild(body);
+      results.appendChild(item);
+    });
+  }
+
+  async function search() {
+    var version = ++queryVersion;
+    var query = input.value.trim().toLocaleLowerCase("ko");
+    results.replaceChildren();
+    if (query.length < 2) {
+      status.textContent = query.length ? "두 글자 이상 입력해 주세요." : "";
+      return;
+    }
+    status.textContent = "검색 인덱스를 불러오는 중입니다.";
+    var matches = [];
+    try {
+      for (var i = 0; i < shardNames.length; i += 1) {
+        var rows = await loadShard(shardNames[i]);
+        if (version !== queryVersion) return;
+        rows.forEach(function (row) {
+          if (row.text.toLocaleLowerCase("ko").includes(query)) matches.push(row);
+        });
+        render(matches, query);
+        status.textContent = "검색 결과 " + matches.length.toLocaleString("ko-KR") + "건";
+      }
+      if (!shardNames.length) status.textContent = "검색할 발언이 없습니다.";
+    } catch (error) {
+      if (version === queryVersion) status.textContent = error.message;
+    }
+  }
+
+  input.addEventListener("input", search);
+}());
+</script>
+{% endblock %}

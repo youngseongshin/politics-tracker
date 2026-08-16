@@ -24,7 +24,7 @@
 | `politics-tracker parse-minutes` | 텍스트 파일에서 발언 추출 | 동작 |
 | `politics-tracker classify-topics` | 주제 분류. rules 백엔드(기본), claude 백엔드 | rules 동작, claude는 페이크 클라이언트로만 검증 |
 | `politics-tracker build-site` | 정적 사이트 생성 | 동작 |
-| `pytest` | 테스트 37건 | 전부 통과 |
+| `pytest` | 테스트 38건 | 전부 통과 |
 
 ### 0.2 코드 지도
 
@@ -41,7 +41,7 @@ politics_tracker/
 ├── site/                  Jinja2 정적 사이트 (templates 4종)
 └── samples/               quickstart용 가상 데이터
 schemas/                   person / utterance JSON Schema (스키마가 SSOT)
-tests/                     37건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
+tests/                     38건. LLM은 FakeClient 주입 패턴(test_topics.py 참조)
 ```
 
 ### 0.3 검증되지 않은 것
@@ -305,12 +305,16 @@ status: `open | correct | incorrect | unresolvable`. LLM은 후보 제안까지�
   **완료(2026-08-16):** 모든 발언 블록에 결정적 ID 앵커와 접근성 레이블이 있는
   § 링크를 추가했다. 직접 접근한 발언은 배경 틴트로 표시된다.
 - T1.4 발언 전문 검색: `build-site`가 `site/search/index-{연도}.json` 샤드를
-  생성한다(필드: utterance_id, person_id, person_name, spoken_at, text). `search.html`
+  생성한다(필드: utterance_id, person_id, person_name, spoken_at, text,
+  source_url, source_title). `search.html`
   페이지: 두 글자 이상 입력 시 연도 샤드를 최신부터 lazy load하며 부분 문자열
   매칭, 결과는 발언 스니펫(일치 부분 강조)과 퍼머링크. 전체 인덱스가 5MB를 넘으면
   샤드를 반기 단위로 좁힌다. Meilisearch 등 검색 서버는 발언 20만 건 초과 시점에
   별도 결정하며 이번 범위가 아니다.
   수용 기준: "부동산" 검색 시 해당 발언들이 인물·날짜·출처와 함께 나온다.
+  **완료(2026-08-16):** 두 글자 이상 입력하면 최신 샤드부터 지연 로드해 부분
+  문자열을 찾는다. 결과에는 일치 구절 강조, 인물·날짜, 발언 퍼머링크와 공식 원문
+  링크가 표시된다. 전체 인덱스가 5MB를 넘을 때 반기 샤드로 나누는 테스트도 고정했다.
 - T1.5 주제별 페이지: `topic/{key}.html`. 해당 주제 발언을 최신순으로 싣고 인물
   필터(클라이언트)를 단다. 인덱스 페이지에 주제 내비게이션을 추가한다.
 - T1.6 인물 페이지 주제 필터: 주제 칩 클릭 시 해당 주제 발언만 표시(클라이언트 토글).
