@@ -124,3 +124,42 @@ def test_full_curated_page_is_answer_first_and_keeps_complete_finder(tmp_path):
     assert 'id="ai-query"' in page
     assert 'data-ai-topic-filter=' not in page
     assert "월별 언급량" not in page
+
+
+def _collected_evidence_analysis():
+    """Real Assembly excerpts, independent of the report's selected IDs."""
+    import json
+    from pathlib import Path
+
+    from politics_tracker.analytics.ai_mentions import build_ai_analysis
+
+    fixture = Path(__file__).parent / "fixtures" / "ai_qualitative_evidence_20261016.json"
+    utterances = [Utterance(**row) for row in json.loads(fixture.read_text(encoding="utf-8"))]
+    return build_ai_analysis([], utterances)
+
+
+def test_curated_report_resolves_against_recollected_official_evidence():
+    # The synthetic helper above copies the report IDs and cannot catch stale
+    # positional IDs. This fixture was parsed from the official meeting URLs.
+    resolved = resolve_ai_qualitative_report(_collected_evidence_analysis())
+
+    assert resolved["available"] is True
+    assert resolved["missing_evidence_count"] == 0
+    assert sum(len(theme["evidence"]) for theme in resolved["themes"]) == 47
+    for theme in resolved["themes"]:
+        for evidence in theme["evidence"]:
+            assert evidence["utterance"].speaker_name in evidence["note"]
+
+
+def test_resolver_rejects_old_positional_ids_after_official_minutes_change():
+    report = load_ai_qualitative_report()
+    evidence = next(
+        item
+        for theme in report["themes"]
+        for item in theme["evidence"]
+        if item["utterance_id"] == "utt_20260407_b692a65c_0910"
+    )
+    evidence["utterance_id"] = "utt_20260407_b692a65c_0926"
+
+    with pytest.raises(ValueError, match="missing evidence IDs.*utt_20260407_b692a65c_0926"):
+        resolve_ai_qualitative_report(_collected_evidence_analysis(), report)
